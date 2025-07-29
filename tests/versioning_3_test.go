@@ -1365,12 +1365,10 @@ func (s *Versioning3Suite) TestChildWorkflowInheritance_ParentPinnedByOverride()
 }
 
 func (s *Versioning3Suite) TestChildWorkflowInheritance_PinnedParent_CrossTQ() {
-	s.T().Skip() // until cross TQ inheritance is implemented
 	s.testChildWorkflowInheritance_ExpectInherit(true, false, vbPinned)
 }
 
 func (s *Versioning3Suite) TestChildWorkflowInheritance_PinnedParent_CrossTQ_WithOverride() {
-	s.T().Skip() // until cross TQ inheritance is implemented
 	s.testChildWorkflowInheritance_ExpectInherit(true, true, vbPinned)
 }
 
