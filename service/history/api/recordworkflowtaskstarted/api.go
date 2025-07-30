@@ -15,6 +15,7 @@ import (
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
+	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/visibility/manager"
@@ -40,7 +41,17 @@ func Invoke(
 	eventNotifier events.Notifier,
 	persistenceVisibilityMgr manager.VisibilityManager,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
-) (*historyservice.RecordWorkflowTaskStartedResponseWithRawHistory, error) {
+) (retResp *historyservice.RecordWorkflowTaskStartedResponseWithRawHistory, retError error) {
+
+	defer func() {
+		shardContext.GetLogger().Info("Processed RecordWorkflowTaskStarted",
+			tag.WorkflowID(req.GetWorkflowExecution().GetWorkflowId()),
+			tag.WorkflowRunID(req.GetWorkflowExecution().GetRunId()),
+			tag.WorkflowScheduledEventID(req.GetScheduledEventId()),
+			tag.Error(retError),
+		)
+	}()
+
 	namespaceEntry, err := api.GetActiveNamespace(shardContext, namespace.ID(req.GetNamespaceId()))
 	if err != nil {
 		return nil, err

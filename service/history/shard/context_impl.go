@@ -675,6 +675,18 @@ func (s *ContextImpl) UpdateWorkflowExecution(
 	if request.NewWorkflowSnapshot != nil {
 		s.updateCloseTaskIDs(request.NewWorkflowSnapshot.ExecutionInfo, request.NewWorkflowSnapshot.Tasks)
 	}
+	for _, task := range request.UpdateWorkflowMutation.Tasks[tasks.CategoryTransfer] {
+		if task.GetType() == enumsspb.TASK_TYPE_TRANSFER_ACTIVITY_TASK ||
+			task.GetType() == enumsspb.TASK_TYPE_TRANSFER_WORKFLOW_TASK {
+			s.GetLogger().Info("Allocated taskID",
+				tag.TaskID(task.GetTaskID()),
+				tag.WorkflowID(task.GetWorkflowID()),
+				tag.WorkflowRunID(task.GetRunID()),
+				tag.TaskType(task.GetType()),
+				tag.Task(task),
+			)
+		}
+	}
 
 	request.RangeID = s.getRangeIDLocked()
 	s.wUnlock()

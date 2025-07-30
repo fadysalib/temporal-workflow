@@ -14,6 +14,7 @@ import (
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
+	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/priorities"
@@ -42,6 +43,15 @@ func Invoke(
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 	matchingClient matchingservice.MatchingServiceClient,
 ) (resp *historyservice.RecordActivityTaskStartedResponse, retError error) {
+
+	defer func() {
+		shardContext.GetLogger().Info("Processed RecordActivityTaskStarted",
+			tag.WorkflowID(request.GetWorkflowExecution().GetWorkflowId()),
+			tag.WorkflowRunID(request.GetWorkflowExecution().GetRunId()),
+			tag.WorkflowScheduledEventID(request.GetScheduledEventId()),
+			tag.Error(retError),
+		)
+	}()
 
 	var err error
 	response := &historyservice.RecordActivityTaskStartedResponse{}

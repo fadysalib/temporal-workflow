@@ -159,6 +159,16 @@ func (t *transferQueueActiveTaskExecutor) processActivityTask(
 	ctx context.Context,
 	task *tasks.ActivityTask,
 ) (retError error) {
+	defer func() {
+		t.logger.Info("Processed activity transfer task",
+			tag.WorkflowID(task.GetWorkflowID()),
+			tag.WorkflowRunID(task.GetRunID()),
+			tag.TaskID(task.GetTaskID()),
+			tag.Task(task),
+			tag.Error(retError),
+		)
+	}()
+
 	ctx, cancel := context.WithTimeout(ctx, taskTimeout)
 	defer cancel()
 
@@ -209,6 +219,16 @@ func (t *transferQueueActiveTaskExecutor) processWorkflowTask(
 	ctx context.Context,
 	transferTask *tasks.WorkflowTask,
 ) (retError error) {
+	defer func() {
+		t.logger.Info("Processed workflow transfer task",
+			tag.WorkflowID(transferTask.GetWorkflowID()),
+			tag.WorkflowRunID(transferTask.GetRunID()),
+			tag.TaskID(transferTask.GetTaskID()),
+			tag.Task(transferTask),
+			tag.Error(retError),
+		)
+	}()
+
 	ctx, cancel := context.WithTimeout(ctx, taskTimeout)
 	defer cancel()
 
