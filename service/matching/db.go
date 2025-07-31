@@ -173,6 +173,16 @@ func (db *taskQueueDB) takeOverTaskQueueLocked(
 			response.TaskQueueInfo.AckLevel,
 			response.TaskQueueInfo.ApproximateBacklogCount,
 		)
+		respSq0AckLevel := int64(-1)
+		if len(response.TaskQueueInfo.Subqueues) > 0 {
+			respSq0AckLevel = response.TaskQueueInfo.Subqueues[0].AckLevel
+		}
+		db.logger.Info("Loaded task queue metadata",
+			tag.ShardRangeID(db.rangeID),
+			tag.AckLevel(db.subqueues[subqueueZero].AckLevel),
+			tag.AckLevel(response.TaskQueueInfo.AckLevel),
+			tag.AckLevel(respSq0AckLevel),
+		)
 		err := db.updateTaskQueueLocked(ctx, true)
 		if err != nil {
 			db.rangeID = 0
@@ -248,6 +258,11 @@ func (db *taskQueueDB) OldUpdateState(
 
 	prevAckLevel := db.subqueues[subqueueZero].AckLevel
 	db.subqueues[subqueueZero].AckLevel = ackLevel
+
+	db.logger.Info("Setting db ackLevel",
+		tag.NewInt64("prev-ack-level", prevAckLevel),
+		tag.AckLevel(ackLevel),
+	)
 
 	err := db.updateTaskQueueLocked(ctx, false)
 	if err != nil {
