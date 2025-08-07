@@ -11,8 +11,9 @@ import (
 type Config struct {
 	NumberOfShards int32
 
-	EnableReplicationStream dynamicconfig.BoolPropertyFn
-	HistoryReplicationDLQV2 dynamicconfig.BoolPropertyFn
+	EnableReplicationStream          dynamicconfig.BoolPropertyFn
+	HistoryReplicationDLQV2          dynamicconfig.BoolPropertyFn
+	ReplicationAllowMultiSourceShard dynamicconfig.BoolPropertyFn
 
 	RPS                                  dynamicconfig.IntPropertyFn
 	OperatorRPSRatio                     dynamicconfig.FloatPropertyFn
@@ -374,8 +375,9 @@ func NewConfig(
 	cfg := &Config{
 		NumberOfShards: numberOfShards,
 
-		EnableReplicationStream: dynamicconfig.EnableReplicationStream.Get(dc),
-		HistoryReplicationDLQV2: dynamicconfig.EnableHistoryReplicationDLQV2.Get(dc),
+		EnableReplicationStream:          dynamicconfig.EnableReplicationStream.Get(dc),
+		HistoryReplicationDLQV2:          dynamicconfig.EnableHistoryReplicationDLQV2.Get(dc),
+		ReplicationAllowMultiSourceShard: dynamicconfig.ReplicationAllowMultiSourceShard.Get(dc),
 
 		RPS:                                  dynamicconfig.HistoryRPS.Get(dc),
 		OperatorRPSRatio:                     dynamicconfig.OperatorRPSRatio.Get(dc),

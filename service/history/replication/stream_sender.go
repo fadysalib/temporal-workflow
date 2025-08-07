@@ -478,6 +478,7 @@ func (s *StreamSenderImpl) sendTasks(
 					ExclusiveHighWatermark:     endExclusiveWatermark,
 					ExclusiveHighWatermarkTime: timestamp.TimeNowPtrUtc(),
 					Priority:                   priority,
+					SourceShardId:              s.serverShardKey.ShardID,
 				},
 			},
 		})
@@ -521,6 +522,7 @@ Loop:
 						ExclusiveHighWatermark:     item.GetTaskID(),
 						ExclusiveHighWatermarkTime: timestamppb.New(item.GetVisibilityTime()),
 						Priority:                   priority,
+						SourceShardId:              s.serverShardKey.ShardID,
 					},
 				},
 			}); err != nil {
@@ -560,6 +562,7 @@ Loop:
 				return nil
 			}
 			task.Priority = priority
+			task.SourceShardId = s.serverShardKey.ShardID
 			if s.isTieredStackEnabled {
 				if err := s.flowController.Wait(s.server.Context(), priority); err != nil {
 					if errors.Is(err, context.Canceled) {
@@ -596,6 +599,7 @@ Loop:
 						ExclusiveHighWatermark:     task.SourceTaskId + 1,
 						ExclusiveHighWatermarkTime: task.VisibilityTime,
 						Priority:                   priority,
+						SourceShardId:              s.serverShardKey.ShardID,
 					},
 				},
 			}); err != nil {
@@ -650,6 +654,7 @@ Loop:
 				ExclusiveHighWatermark:     endExclusiveWatermark,
 				ExclusiveHighWatermarkTime: timestamp.TimeNowPtrUtc(),
 				Priority:                   priority,
+				SourceShardId:              s.serverShardKey.ShardID,
 			},
 		},
 	})

@@ -118,6 +118,11 @@ func (m *StreamReceiverMonitorImpl) RegisterInboundStream(
 	defer m.Unlock()
 
 	if staleSender, ok := m.inboundStreams[streamKey]; ok {
+		m.Logger.Info("Found stale inbound stream. Stopping it.",
+			tag.SourceCluster(strconv.Itoa(int(streamKey.Client.ClusterID))),
+			tag.TargetCluster(strconv.Itoa(int(streamKey.Server.ClusterID))),
+			tag.SourceShardID(streamKey.Client.ShardID),
+			tag.TargetShardID(streamKey.Server.ShardID))
 		staleSender.Stop()
 		delete(m.inboundStreams, streamKey)
 	}

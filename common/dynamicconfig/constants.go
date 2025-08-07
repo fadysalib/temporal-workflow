@@ -2406,6 +2406,11 @@ that task will be sent to DLQ.`,
 		true,
 		`ReplicationEnableRateLimit is the feature flag to enable replication global rate limiter`,
 	)
+	ReplicationAllowMultiSourceShard = NewGlobalBoolSetting(
+		"history.ReplicationAllowMultiSourceShard",
+		false,
+		`ReplicationAllowMultiSourceShard enables stream receiver to handle replication tasks from multiple source shards with separate task trackers`,
+	)
 	WorkflowIdReuseMinimalInterval = NewNamespaceDurationSetting(
 		"history.workflowIdReuseMinimalInterval",
 		1*time.Second,

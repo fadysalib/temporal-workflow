@@ -24,6 +24,7 @@ import "temporal/server/api/workflow/v1/message.proto";
 message ReplicationTask {
     temporal.server.api.enums.v1.ReplicationTaskType task_type = 1;
     int64 source_task_id = 2;
+    int32 source_shard_id = 20;
     reserved 4;
     reserved 7;
     oneof attributes {
@@ -66,10 +67,21 @@ message SyncReplicationState {
     // deprecated in favor of using ReplicationState object
     int64 inclusive_low_watermark = 1;
     // deprecated in favor of using ReplicationState object
-    google.protobuf.Timestamp  inclusive_low_watermark_time = 2;
+    google.protobuf.Timestamp inclusive_low_watermark_time = 2;
     ReplicationState high_priority_state = 3;
     ReplicationState low_priority_state = 4;
+    // Per-source shard states organized by source shard ID for multi-source shard support.
+    map<int32, SourceShardStates> source_shard_states = 5;
+    int32 target_shard_id = 6;
+    // If set, the replication tasks will be reset.
+    SourceShardStates resend_replication_tasks = 7;
 }
+
+message SourceShardStates {
+    ReplicationState high_priority_state = 1;
+    ReplicationState low_priority_state = 2;
+}
+
 message ReplicationState {
     int64 inclusive_low_watermark = 1;
     google.protobuf.Timestamp inclusive_low_watermark_time = 2;
@@ -91,6 +103,7 @@ message WorkflowReplicationMessages {
     int64 exclusive_high_watermark = 2;
     google.protobuf.Timestamp  exclusive_high_watermark_time = 3;
     temporal.server.api.enums.v1.TaskPriority priority = 4;
+    int32 source_shard_id = 5;
 }
 
 // TODO: Deprecate this definition, it only used by the deprecated replication DLQ v1 logic

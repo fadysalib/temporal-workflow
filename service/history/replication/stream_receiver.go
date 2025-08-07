@@ -46,13 +46,16 @@ type (
 		serverShardKey          ClusterShardKey
 		highPriorityTaskTracker ExecutableTaskTracker
 		lowPriorityTaskTracker  ExecutableTaskTracker
-		shutdownChan            channel.ShutdownOnce
-		logger                  log.Logger
-		stream                  Stream
-		taskConverter           ExecutableTaskConverter
-		receiverMode            ReceiverMode
-		flowController          ReceiverFlowController
-		recvSignalChan          chan struct{}
+		// Multi-source shard support: maps from source_shard_id to task trackers
+		multiShardHighPriorityTaskTrackers map[int32]ExecutableTaskTracker
+		multiShardLowPriorityTaskTrackers  map[int32]ExecutableTaskTracker
+		shutdownChan                       channel.ShutdownOnce
+		logger                             log.Logger
+		stream                             Stream
+		taskConverter                      ExecutableTaskConverter
+		receiverMode                       ReceiverMode
+		flowController                     ReceiverFlowController
+		recvSignalChan                     chan struct{}
 	}
 )
 
@@ -95,13 +98,15 @@ func NewStreamReceiver(
 	return &StreamReceiverImpl{
 		ProcessToolBox: processToolBox,
 
-		status:                  common.DaemonStatusInitialized,
-		clientShardKey:          clientShardKey,
-		serverShardKey:          serverShardKey,
-		highPriorityTaskTracker: highPriorityTaskTracker,
-		lowPriorityTaskTracker:  lowPriorityTaskTracker,
-		shutdownChan:            channel.NewShutdownOnce(),
-		logger:                  logger,
+		status:                             common.DaemonStatusInitialized,
+		clientShardKey:                     clientShardKey,
+		serverShardKey:                     serverShardKey,
+		highPriorityTaskTracker:            highPriorityTaskTracker,
+		lowPriorityTaskTracker:             lowPriorityTaskTracker,
+		multiShardHighPriorityTaskTrackers: make(map[int32]ExecutableTaskTracker),
+		multiShardLowPriorityTaskTrackers:  make(map[int32]ExecutableTaskTracker),
+		shutdownChan:                       channel.NewShutdownOnce(),
+		logger:                             logger,
 		stream: newStream(
 			processToolBox,
 			clientShardKey,
@@ -144,6 +149,14 @@ func (r *StreamReceiverImpl) Stop() {
 	r.stream.Close()
 	r.highPriorityTaskTracker.Cancel()
 	r.lowPriorityTaskTracker.Cancel()
+
+	// Cancel all multi-shard task trackers
+	for _, tracker := range r.multiShardHighPriorityTaskTrackers {
+		tracker.Cancel()
+	}
+	for _, tracker := range r.multiShardLowPriorityTaskTrackers {
+		tracker.Cancel()
+	}
 
 	r.logger.Info("StreamReceiver shutting down.")
 }
@@ -210,9 +223,27 @@ func (r *StreamReceiverImpl) recvEventLoop() error {
 func (r *StreamReceiverImpl) ackMessage(
 	stream Stream,
 ) (int64, error) {
-	highPriorityWaterMarkInfo := r.highPriorityTaskTracker.LowWatermark()
-	lowPriorityWaterMarkInfo := r.lowPriorityTaskTracker.LowWatermark()
-	size := r.highPriorityTaskTracker.Size() + r.lowPriorityTaskTracker.Size()
+	var highPriorityWaterMarkInfo, lowPriorityWaterMarkInfo *WatermarkInfo
+	var size int
+
+	if r.Config.ReplicationAllowMultiSourceShard() {
+		// Multi-source shard mode: aggregate watermarks from all source shards
+		highPriorityWaterMarkInfo = r.getAggregatedWatermark(r.multiShardHighPriorityTaskTrackers)
+		lowPriorityWaterMarkInfo = r.getAggregatedWatermark(r.multiShardLowPriorityTaskTrackers)
+
+		// Calculate total size across all source shards
+		for _, tracker := range r.multiShardHighPriorityTaskTrackers {
+			size += tracker.Size()
+		}
+		for _, tracker := range r.multiShardLowPriorityTaskTrackers {
+			size += tracker.Size()
+		}
+	} else {
+		// Legacy mode: use single task trackers
+		highPriorityWaterMarkInfo = r.highPriorityTaskTracker.LowWatermark()
+		lowPriorityWaterMarkInfo = r.lowPriorityTaskTracker.LowWatermark()
+		size = r.highPriorityTaskTracker.Size() + r.lowPriorityTaskTracker.Size()
+	}
 
 	var highPriorityWatermark, lowPriorityWatermark *replicationspb.ReplicationState
 	inclusiveLowWaterMark := int64(-1)
@@ -271,14 +302,71 @@ func (r *StreamReceiverImpl) ackMessage(
 		return 0, NewStreamError("InclusiveLowWaterMark is not set", serviceerror.NewInternal("Invalid inclusive low watermark"))
 	}
 
+	// Build the sync replication state
+	syncState := &replicationspb.SyncReplicationState{
+		InclusiveLowWatermark:     inclusiveLowWaterMark,
+		InclusiveLowWatermarkTime: timestamppb.New(inclusiveLowWaterMarkTime),
+		HighPriorityState:         highPriorityWatermark,
+		LowPriorityState:          lowPriorityWatermark,
+	}
+
+	// If multi-source shard is enabled, populate source shard states organized by priority
+	if r.Config.ReplicationAllowMultiSourceShard() {
+		sourceShardStatesMap := make(map[int32]*replicationspb.SourceShardStates)
+
+		// Collect all unique source shard IDs from both priority trackers
+		allSourceShardIDs := make(map[int32]struct{})
+		for sourceShardID := range r.multiShardHighPriorityTaskTrackers {
+			allSourceShardIDs[sourceShardID] = struct{}{}
+		}
+		for sourceShardID := range r.multiShardLowPriorityTaskTrackers {
+			allSourceShardIDs[sourceShardID] = struct{}{}
+		}
+
+		// Create SourceShardStates for each source shard
+		for sourceShardID := range allSourceShardIDs {
+			shardStates := &replicationspb.SourceShardStates{}
+
+			// Add high priority state if tracker exists
+			if tracker, exists := r.multiShardHighPriorityTaskTrackers[sourceShardID]; exists {
+				if watermark := tracker.LowWatermark(); watermark != nil {
+					flowControlCommand := r.flowController.GetFlowControlInfo(enumsspb.TASK_PRIORITY_HIGH)
+					shardStates.HighPriorityState = &replicationspb.ReplicationState{
+						InclusiveLowWatermark:     watermark.Watermark,
+						InclusiveLowWatermarkTime: timestamppb.New(watermark.Timestamp),
+						FlowControlCommand:        flowControlCommand,
+					}
+				}
+			}
+
+			// Add low priority state if tracker exists
+			if tracker, exists := r.multiShardLowPriorityTaskTrackers[sourceShardID]; exists {
+				if watermark := tracker.LowWatermark(); watermark != nil {
+					flowControlCommand := r.flowController.GetFlowControlInfo(enumsspb.TASK_PRIORITY_LOW)
+					shardStates.LowPriorityState = &replicationspb.ReplicationState{
+						InclusiveLowWatermark:     watermark.Watermark,
+						InclusiveLowWatermarkTime: timestamppb.New(watermark.Timestamp),
+						FlowControlCommand:        flowControlCommand,
+					}
+				}
+			}
+
+			// Only add to map if we have at least one state
+			if shardStates.HighPriorityState != nil || shardStates.LowPriorityState != nil {
+				sourceShardStatesMap[sourceShardID] = shardStates
+			}
+		}
+
+		// Only populate SourceShardStates if we have any states to report
+		if len(sourceShardStatesMap) > 0 {
+			syncState.SourceShardStates = sourceShardStatesMap
+		}
+		syncState.TargetShardId = r.serverShardKey.ShardID
+	}
+
 	if err := stream.Send(&adminservice.StreamWorkflowReplicationMessagesRequest{
 		Attributes: &adminservice.StreamWorkflowReplicationMessagesRequest_SyncReplicationState{
-			SyncReplicationState: &replicationspb.SyncReplicationState{
-				InclusiveLowWatermark:     inclusiveLowWaterMark,
-				InclusiveLowWatermarkTime: timestamppb.New(inclusiveLowWaterMarkTime),
-				HighPriorityState:         highPriorityWatermark,
-				LowPriorityState:          lowPriorityWatermark,
-			},
+			SyncReplicationState: syncState,
 		},
 	}); err != nil {
 		return 0, NewStreamError("stream_receiver failed to send", err)
@@ -336,20 +424,51 @@ func (r *StreamReceiverImpl) processMessages(
 		)
 		exclusiveHighWatermark := streamResp.Resp.GetMessages().ExclusiveHighWatermark
 		exclusiveHighWatermarkTime := timestamp.TimeValue(streamResp.Resp.GetMessages().ExclusiveHighWatermarkTime)
-		taskTracker, err := r.getTaskTracker(streamResp.Resp.GetMessages().Priority)
-		if err != nil {
-			// Todo: Change to write Tasks to DLQ. As resend task will not help here
-			return NewStreamError("ReplicationTask wrong priority", err)
-		}
-		for _, task := range taskTracker.TrackTasks(WatermarkInfo{
-			Watermark: exclusiveHighWatermark,
-			Timestamp: exclusiveHighWatermarkTime,
-		}, convertedTasks...) {
-			scheduler, err := r.getTaskScheduler(streamResp.Resp.GetMessages().Priority, task)
-			if err != nil {
-				return err
+
+		if r.Config.ReplicationAllowMultiSourceShard() {
+			// Multi-source shard mode: group tasks by source_shard_id
+			tasksBySourceShard := make(map[int32][]TrackableExecutableTask)
+			// make sure we update the exclusive watermark even if there are no tasks for this source shard
+			tasksBySourceShard[streamResp.Resp.GetMessages().SourceShardId] = []TrackableExecutableTask{}
+			for _, task := range convertedTasks {
+				sourceShardID := task.ReplicationTask().GetSourceShardId()
+				tasksBySourceShard[sourceShardID] = append(tasksBySourceShard[sourceShardID], task)
 			}
-			scheduler.Submit(task)
+
+			// Process each source shard group separately
+			for sourceShardID, tasks := range tasksBySourceShard {
+				taskTracker, err := r.getOrCreateTaskTrackerForSourceShard(sourceShardID, streamResp.Resp.GetMessages().Priority)
+				if err != nil {
+					return NewStreamError("ReplicationTask wrong priority", err)
+				}
+				for _, task := range taskTracker.TrackTasks(WatermarkInfo{
+					Watermark: exclusiveHighWatermark,
+					Timestamp: exclusiveHighWatermarkTime,
+				}, tasks...) {
+					scheduler, err := r.getTaskScheduler(streamResp.Resp.GetMessages().Priority, task)
+					if err != nil {
+						return err
+					}
+					scheduler.Submit(task)
+				}
+			}
+		} else {
+			// Legacy mode: single task tracker for all tasks
+			taskTracker, err := r.getTaskTracker(streamResp.Resp.GetMessages().Priority)
+			if err != nil {
+				// Todo: Change to write Tasks to DLQ. As resend task will not help here
+				return NewStreamError("ReplicationTask wrong priority", err)
+			}
+			for _, task := range taskTracker.TrackTasks(WatermarkInfo{
+				Watermark: exclusiveHighWatermark,
+				Timestamp: exclusiveHighWatermarkTime,
+			}, convertedTasks...) {
+				scheduler, err := r.getTaskScheduler(streamResp.Resp.GetMessages().Priority, task)
+				if err != nil {
+					return err
+				}
+				scheduler.Submit(task)
+			}
 		}
 	}
 	return nil
@@ -452,6 +571,61 @@ type streamClientProvider struct {
 	processToolBox ProcessToolBox
 	clientShardKey ClusterShardKey
 	serverShardKey ClusterShardKey
+}
+
+// getAggregatedWatermark returns the minimum watermark across all source shard trackers
+// This ensures we don't acknowledge tasks that haven't been processed across all source shards
+func (r *StreamReceiverImpl) getAggregatedWatermark(trackers map[int32]ExecutableTaskTracker) *WatermarkInfo {
+	if len(trackers) == 0 {
+		return nil
+	}
+
+	var minWatermark *WatermarkInfo
+	for _, tracker := range trackers {
+		watermark := tracker.LowWatermark()
+		if watermark == nil {
+			continue
+		}
+
+		if minWatermark == nil || watermark.Watermark < minWatermark.Watermark {
+			minWatermark = watermark
+		}
+	}
+
+	return minWatermark
+}
+
+// getOrCreateTaskTrackerForSourceShard returns the appropriate task tracker for the given source shard and priority
+// If multi-source shard is enabled, it creates per-shard trackers, otherwise falls back to legacy behavior
+func (r *StreamReceiverImpl) getOrCreateTaskTrackerForSourceShard(sourceShardID int32, priority enumsspb.TaskPriority) (ExecutableTaskTracker, error) {
+	if !r.Config.ReplicationAllowMultiSourceShard() {
+		// Feature flag disabled, use legacy behavior
+		return r.getTaskTracker(priority)
+	}
+
+	// Multi-source shard mode enabled
+	switch priority {
+	case enumsspb.TASK_PRIORITY_UNSPECIFIED, enumsspb.TASK_PRIORITY_HIGH:
+		if tracker, exists := r.multiShardHighPriorityTaskTrackers[sourceShardID]; exists {
+			return tracker, nil
+		}
+		// Create new tracker for this source shard
+		logger := log.With(r.logger, tag.SourceShardID(sourceShardID))
+		tracker := NewExecutableTaskTracker(logger, r.MetricsHandler)
+		r.multiShardHighPriorityTaskTrackers[sourceShardID] = tracker
+		return tracker, nil
+	case enumsspb.TASK_PRIORITY_LOW:
+		if tracker, exists := r.multiShardLowPriorityTaskTrackers[sourceShardID]; exists {
+			return tracker, nil
+		}
+		// Create new tracker for this source shard
+		logger := log.With(r.logger, tag.SourceShardID(sourceShardID))
+		tracker := NewExecutableTaskTracker(logger, r.MetricsHandler)
+		r.multiShardLowPriorityTaskTrackers[sourceShardID] = tracker
+		return tracker, nil
+	default:
+		return nil, serviceerror.NewInvalidArgumentf("Unknown task priority: %v", priority)
+	}
 }
 
 var _ BiDirectionStreamClientProvider[*adminservice.StreamWorkflowReplicationMessagesRequest, *adminservice.StreamWorkflowReplicationMessagesResponse] = (*streamClientProvider)(nil)

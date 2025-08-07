@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	ctasks "go.temporal.io/server/common/tasks"
+	"go.temporal.io/server/service/history/configs"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -74,6 +75,9 @@ func (s *streamReceiverSuite) SetupTest() {
 		tasks: nil,
 	}
 
+	mockConfig := &configs.Config{
+		ReplicationAllowMultiSourceShard: func() bool { return false },
+	}
 	processToolBox := ProcessToolBox{
 		ClusterMetadata:           s.clusterMetadata,
 		HighPriorityTaskScheduler: s.taskScheduler,
@@ -81,6 +85,7 @@ func (s *streamReceiverSuite) SetupTest() {
 		MetricsHandler:            metrics.NoopMetricsHandler,
 		Logger:                    log.NewTestLogger(),
 		DLQWriter:                 NoopDLQWriter{},
+		Config:                    mockConfig,
 	}
 	s.clusterMetadata.EXPECT().ClusterNameForFailoverVersion(true, gomock.Any()).Return("some-cluster-name").AnyTimes()
 	s.streamReceiver = NewStreamReceiver(
@@ -547,3 +552,279 @@ func (s *mockScheduler) TrySubmit(task TrackableExecutableTask) bool {
 
 func (s *mockScheduler) Start() {}
 func (s *mockScheduler) Stop()  {}
+
+// TestMultiSourceShard_FeatureFlagDisabled tests that when the feature flag is disabled,
+// behavior remains the same as before (legacy mode)
+func (s *streamReceiverSuite) TestMultiSourceShard_FeatureFlagDisabled() {
+	// Set the config to return false for multi-source shard (it's already false by default)
+	watermarkInfo := &WatermarkInfo{
+		Watermark: rand.Int63(),
+		Timestamp: time.Unix(0, rand.Int63()),
+	}
+
+	s.streamReceiver.receiverMode = ReceiverModeSingleStack
+	s.highPriorityTaskTracker.EXPECT().LowWatermark().Return(watermarkInfo)
+	s.lowPriorityTaskTracker.EXPECT().LowWatermark().Return(nil)
+	s.highPriorityTaskTracker.EXPECT().Size().Return(0)
+	s.lowPriorityTaskTracker.EXPECT().Size().Return(0)
+
+	_, err := s.streamReceiver.ackMessage(s.stream)
+	s.NoError(err)
+	s.Equal(1, len(s.stream.requests))
+}
+
+// TestMultiSourceShard_GetAggregatedWatermark tests the aggregation logic for watermarks
+func (s *streamReceiverSuite) TestMultiSourceShard_GetAggregatedWatermark() {
+	// Create mock trackers with different watermarks
+	tracker1 := NewMockExecutableTaskTracker(s.controller)
+	tracker2 := NewMockExecutableTaskTracker(s.controller)
+	tracker3 := NewMockExecutableTaskTracker(s.controller)
+
+	watermark1 := &WatermarkInfo{Watermark: 100, Timestamp: time.Now()}
+	watermark2 := &WatermarkInfo{Watermark: 50, Timestamp: time.Now()} // This should be the minimum
+	watermark3 := &WatermarkInfo{Watermark: 200, Timestamp: time.Now()}
+
+	tracker1.EXPECT().LowWatermark().Return(watermark1)
+	tracker2.EXPECT().LowWatermark().Return(watermark2)
+	tracker3.EXPECT().LowWatermark().Return(watermark3)
+
+	trackers := map[int32]ExecutableTaskTracker{
+		1: tracker1,
+		2: tracker2,
+		3: tracker3,
+	}
+
+	result := s.streamReceiver.getAggregatedWatermark(trackers)
+	s.NotNil(result)
+	s.Equal(int64(50), result.Watermark) // Should return the minimum watermark
+}
+
+// TestMultiSourceShard_GetAggregatedWatermark_WithNilWatermarks tests aggregation when some trackers have nil watermarks
+func (s *streamReceiverSuite) TestMultiSourceShard_GetAggregatedWatermark_WithNilWatermarks() {
+	tracker1 := NewMockExecutableTaskTracker(s.controller)
+	tracker2 := NewMockExecutableTaskTracker(s.controller)
+	tracker3 := NewMockExecutableTaskTracker(s.controller)
+
+	watermark1 := &WatermarkInfo{Watermark: 100, Timestamp: time.Now()}
+	watermark3 := &WatermarkInfo{Watermark: 200, Timestamp: time.Now()}
+
+	tracker1.EXPECT().LowWatermark().Return(watermark1)
+	tracker2.EXPECT().LowWatermark().Return(nil) // This tracker has no watermark
+	tracker3.EXPECT().LowWatermark().Return(watermark3)
+
+	trackers := map[int32]ExecutableTaskTracker{
+		1: tracker1,
+		2: tracker2,
+		3: tracker3,
+	}
+
+	result := s.streamReceiver.getAggregatedWatermark(trackers)
+	s.NotNil(result)
+	s.Equal(int64(100), result.Watermark) // Should return the minimum non-nil watermark
+}
+
+// TestMultiSourceShard_GetAggregatedWatermark_EmptyTrackers tests aggregation with empty tracker map
+func (s *streamReceiverSuite) TestMultiSourceShard_GetAggregatedWatermark_EmptyTrackers() {
+	trackers := map[int32]ExecutableTaskTracker{}
+	result := s.streamReceiver.getAggregatedWatermark(trackers)
+	s.Nil(result)
+}
+
+// TestMultiSourceShard_GetOrCreateTaskTracker tests task tracker creation per source shard
+func (s *streamReceiverSuite) TestMultiSourceShard_GetOrCreateTaskTracker() {
+	// Set the config to return true for multi-source shard
+	s.streamReceiver.Config.ReplicationAllowMultiSourceShard = func() bool { return true }
+
+	// First call should create a new tracker
+	tracker1, err := s.streamReceiver.getOrCreateTaskTrackerForSourceShard(1, enumsspb.TASK_PRIORITY_HIGH)
+	s.NoError(err)
+	s.NotNil(tracker1)
+
+	// Second call with same source shard should return the same tracker
+	tracker2, err := s.streamReceiver.getOrCreateTaskTrackerForSourceShard(1, enumsspb.TASK_PRIORITY_HIGH)
+	s.NoError(err)
+	s.Equal(tracker1, tracker2)
+
+	// Verify tracker was stored in the map
+	s.Len(s.streamReceiver.multiShardHighPriorityTaskTrackers, 1)
+	s.Equal(tracker1, s.streamReceiver.multiShardHighPriorityTaskTrackers[1])
+}
+
+// TestMultiSourceShard_GetOrCreateTaskTracker_LegacyMode tests fallback to legacy behavior when feature flag is disabled
+func (s *streamReceiverSuite) TestMultiSourceShard_GetOrCreateTaskTracker_LegacyMode() {
+	// Config is already set to return false for multi-source shard by default
+	tracker, err := s.streamReceiver.getOrCreateTaskTrackerForSourceShard(1, enumsspb.TASK_PRIORITY_HIGH)
+	s.NoError(err)
+	s.Equal(s.streamReceiver.highPriorityTaskTracker, tracker) // Should return the legacy tracker
+}
+
+// TestMultiSourceShard_AckMessage_WithSourceShardStates tests that source shard states are populated when feature flag is enabled
+func (s *streamReceiverSuite) TestMultiSourceShard_AckMessage_WithSourceShardStates() {
+	// Enable multi-source shard feature
+	s.streamReceiver.Config.ReplicationAllowMultiSourceShard = func() bool { return true }
+	s.streamReceiver.receiverMode = ReceiverModeSingleStack
+
+	// Create mock trackers for different source shards
+	tracker1 := NewMockExecutableTaskTracker(s.controller)
+	tracker2 := NewMockExecutableTaskTracker(s.controller)
+
+	watermark1 := &WatermarkInfo{Watermark: 100, Timestamp: time.Now()}
+	watermark2 := &WatermarkInfo{Watermark: 200, Timestamp: time.Now()}
+
+	tracker1.EXPECT().LowWatermark().Return(watermark1).AnyTimes()
+	tracker2.EXPECT().LowWatermark().Return(watermark2).AnyTimes()
+	tracker1.EXPECT().Size().Return(5).AnyTimes()
+	tracker2.EXPECT().Size().Return(3).AnyTimes()
+
+	// Set up multi-shard trackers
+	s.streamReceiver.multiShardHighPriorityTaskTrackers[1] = tracker1
+	s.streamReceiver.multiShardHighPriorityTaskTrackers[2] = tracker2
+
+	// Mock flow controller
+	s.receiverFlowController.EXPECT().GetFlowControlInfo(enumsspb.TASK_PRIORITY_HIGH).Return(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_RESUME).Times(2)
+
+	// Call ackMessage
+	_, err := s.streamReceiver.ackMessage(s.stream)
+	s.NoError(err)
+
+	// Verify request was sent
+	s.Equal(1, len(s.stream.requests))
+
+	// Verify source shard states are populated
+	syncState := s.stream.requests[0].GetSyncReplicationState()
+	s.NotNil(syncState)
+	s.NotNil(syncState.SourceShardStates)
+
+	// Verify we have states for both source shards
+	s.Len(syncState.SourceShardStates, 2)
+
+	// Verify individual source shard states
+	shardState1 := syncState.SourceShardStates[1]
+	s.NotNil(shardState1)
+	s.NotNil(shardState1.HighPriorityState)
+	s.Equal(int64(100), shardState1.HighPriorityState.InclusiveLowWatermark)
+	s.Equal(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_RESUME, shardState1.HighPriorityState.FlowControlCommand)
+	s.Nil(shardState1.LowPriorityState) // No low priority tracker was set up
+
+	shardState2 := syncState.SourceShardStates[2]
+	s.NotNil(shardState2)
+	s.NotNil(shardState2.HighPriorityState)
+	s.Equal(int64(200), shardState2.HighPriorityState.InclusiveLowWatermark)
+	s.Equal(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_RESUME, shardState2.HighPriorityState.FlowControlCommand)
+	s.Nil(shardState2.LowPriorityState) // No low priority tracker was set up
+}
+
+// TestMultiSourceShard_AckMessage_LegacyMode_NoSourceShardStates tests that source shard states are not populated when feature flag is disabled
+func (s *streamReceiverSuite) TestMultiSourceShard_AckMessage_LegacyMode_NoSourceShardStates() {
+	// Feature flag is disabled by default
+	s.streamReceiver.receiverMode = ReceiverModeSingleStack
+
+	watermarkInfo := &WatermarkInfo{
+		Watermark: rand.Int63(),
+		Timestamp: time.Unix(0, rand.Int63()),
+	}
+
+	s.highPriorityTaskTracker.EXPECT().LowWatermark().Return(watermarkInfo)
+	s.lowPriorityTaskTracker.EXPECT().LowWatermark().Return(nil)
+	s.highPriorityTaskTracker.EXPECT().Size().Return(0)
+	s.lowPriorityTaskTracker.EXPECT().Size().Return(0)
+
+	_, err := s.streamReceiver.ackMessage(s.stream)
+	s.NoError(err)
+
+	// Verify request was sent
+	s.Equal(1, len(s.stream.requests))
+
+	// Verify source shard states are NOT populated
+	syncState := s.stream.requests[0].GetSyncReplicationState()
+	s.NotNil(syncState)
+	s.Nil(syncState.SourceShardStates) // Should be nil when feature flag is disabled
+}
+
+// TestMultiSourceShard_AckMessage_WithBothPriorityStates tests both high and low priority states
+func (s *streamReceiverSuite) TestMultiSourceShard_AckMessage_WithBothPriorityStates() {
+	// Enable multi-source shard feature
+	s.streamReceiver.Config.ReplicationAllowMultiSourceShard = func() bool { return true }
+	s.streamReceiver.receiverMode = ReceiverModeTieredStack // Use tiered stack for both priorities
+
+	// Create mock trackers for different source shards and priorities
+	highTracker1 := NewMockExecutableTaskTracker(s.controller)
+	highTracker2 := NewMockExecutableTaskTracker(s.controller)
+	lowTracker1 := NewMockExecutableTaskTracker(s.controller)
+	lowTracker3 := NewMockExecutableTaskTracker(s.controller) // different shard for low priority
+
+	highWatermark1 := &WatermarkInfo{Watermark: 100, Timestamp: time.Now()}
+	highWatermark2 := &WatermarkInfo{Watermark: 150, Timestamp: time.Now()}
+	lowWatermark1 := &WatermarkInfo{Watermark: 80, Timestamp: time.Now()}
+	lowWatermark3 := &WatermarkInfo{Watermark: 90, Timestamp: time.Now()}
+
+	highTracker1.EXPECT().LowWatermark().Return(highWatermark1).AnyTimes()
+	highTracker2.EXPECT().LowWatermark().Return(highWatermark2).AnyTimes()
+	lowTracker1.EXPECT().LowWatermark().Return(lowWatermark1).AnyTimes()
+	lowTracker3.EXPECT().LowWatermark().Return(lowWatermark3).AnyTimes()
+
+	// Set up size expectations for aggregated watermark calculation
+	highTracker1.EXPECT().Size().Return(2).AnyTimes()
+	highTracker2.EXPECT().Size().Return(3).AnyTimes()
+	lowTracker1.EXPECT().Size().Return(1).AnyTimes()
+	lowTracker3.EXPECT().Size().Return(4).AnyTimes()
+
+	// Set up multi-shard trackers
+	s.streamReceiver.multiShardHighPriorityTaskTrackers[1] = highTracker1
+	s.streamReceiver.multiShardHighPriorityTaskTrackers[2] = highTracker2
+	s.streamReceiver.multiShardLowPriorityTaskTrackers[1] = lowTracker1 // same shard as high priority
+	s.streamReceiver.multiShardLowPriorityTaskTrackers[3] = lowTracker3 // different shard
+
+	// Mock flow controller - for both per-source-shard states and original tiered stack logging
+	s.receiverFlowController.EXPECT().GetFlowControlInfo(enumsspb.TASK_PRIORITY_HIGH).Return(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_RESUME).AnyTimes()
+	s.receiverFlowController.EXPECT().GetFlowControlInfo(enumsspb.TASK_PRIORITY_LOW).Return(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_PAUSE).AnyTimes()
+
+	// The original task trackers might still be used for logging in tiered stack mode
+	s.highPriorityTaskTracker.EXPECT().Size().Return(0).AnyTimes()
+	s.lowPriorityTaskTracker.EXPECT().Size().Return(0).AnyTimes()
+
+	// Also need LowWatermark expectations for potential aggregated watermark calculations
+	s.highPriorityTaskTracker.EXPECT().LowWatermark().Return(&WatermarkInfo{Watermark: 50, Timestamp: time.Now()}).AnyTimes()
+	s.lowPriorityTaskTracker.EXPECT().LowWatermark().Return(&WatermarkInfo{Watermark: 40, Timestamp: time.Now()}).AnyTimes()
+
+	// Call ackMessage
+	_, err := s.streamReceiver.ackMessage(s.stream)
+	s.NoError(err)
+
+	// Verify request was sent
+	s.Equal(1, len(s.stream.requests))
+
+	// Verify source shard states are populated
+	syncState := s.stream.requests[0].GetSyncReplicationState()
+	s.NotNil(syncState)
+	s.NotNil(syncState.SourceShardStates)
+
+	// Verify we have states for all shards (1, 2, 3)
+	s.Len(syncState.SourceShardStates, 3)
+
+	// Verify shard 1 (has both high and low priority)
+	shardState1 := syncState.SourceShardStates[1]
+	s.NotNil(shardState1)
+	s.NotNil(shardState1.HighPriorityState)
+	s.Equal(int64(100), shardState1.HighPriorityState.InclusiveLowWatermark)
+	s.Equal(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_RESUME, shardState1.HighPriorityState.FlowControlCommand)
+	s.NotNil(shardState1.LowPriorityState)
+	s.Equal(int64(80), shardState1.LowPriorityState.InclusiveLowWatermark)
+	s.Equal(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_PAUSE, shardState1.LowPriorityState.FlowControlCommand)
+
+	// Verify shard 2 (has only high priority)
+	shardState2 := syncState.SourceShardStates[2]
+	s.NotNil(shardState2)
+	s.NotNil(shardState2.HighPriorityState)
+	s.Equal(int64(150), shardState2.HighPriorityState.InclusiveLowWatermark)
+	s.Equal(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_RESUME, shardState2.HighPriorityState.FlowControlCommand)
+	s.Nil(shardState2.LowPriorityState) // No low priority tracker for shard 2
+
+	// Verify shard 3 (has only low priority)
+	shardState3 := syncState.SourceShardStates[3]
+	s.NotNil(shardState3)
+	s.Nil(shardState3.HighPriorityState) // No high priority tracker for shard 3
+	s.NotNil(shardState3.LowPriorityState)
+	s.Equal(int64(90), shardState3.LowPriorityState.InclusiveLowWatermark)
+	s.Equal(enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_PAUSE, shardState3.LowPriorityState.FlowControlCommand)
+}
