@@ -18,7 +18,7 @@ var (
 	FlagTaskQueue                  = "task-queue"
 	FlagTaskQueueType              = "task-queue-type"
 	FlagContextTimeout             = "context-timeout"
-	FlagGrpcMaxRecvSize            = "grpc-max-recv-size"
+	FlagGrpcMaxCallRecvSize        = "grpc-max-call-recv-size"
 	FlagContextTimeoutAlias        = []string{"ct"}
 	FlagCluster                    = "cluster"
 	FlagTargetCluster              = "target-cluster"

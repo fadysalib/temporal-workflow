@@ -113,8 +113,8 @@ func (b *clientFactory) createGRPCConnection(c *cli.Context) (*grpc.ClientConn, 
 	}
 
 	var defaultCallOptions []grpc.CallOption
-	if c.IsSet(FlagGrpcMaxRecvSize) {
-		defaultCallOptions = append(defaultCallOptions, grpc.MaxCallRecvMsgSize(c.Int(FlagGrpcMaxRecvSize)))
+	if c.IsSet(FlagGrpcMaxCallRecvSize) {
+		defaultCallOptions = append(defaultCallOptions, grpc.MaxCallRecvMsgSize(c.Int(FlagGrpcMaxCallRecvSize)))
 	}
 
 	if len(defaultCallOptions) > 0 {

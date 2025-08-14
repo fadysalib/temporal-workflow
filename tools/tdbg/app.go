@@ -68,9 +68,9 @@ func NewCliApp(opts ...Option) *cli.App {
 			EnvVars: []string{"TEMPORAL_CONTEXT_TIMEOUT"},
 		},
 		&cli.IntFlag{
-			Name:    FlagGrpcMaxRecvSize,
-			Usage:   "Optional setting for max grpc recv size RPC call in bytes",
-			EnvVars: []string{"TEMPORAL_CONTEXT_TIMEOUT"},
+			Name:    FlagGrpcMaxCallRecvSize,
+			Usage:   "Optional setting for RPC call's max recv message size in bytes",
+			EnvVars: []string{"TEMPORAL_GRPC_MAX_CALL_RECV_SIZE"},
 		},
 		&cli.BoolFlag{
 			Name:  FlagYes,
