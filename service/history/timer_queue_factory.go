@@ -2,12 +2,10 @@ package history
 
 import (
 	"go.temporal.io/server/client"
-	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/persistence/visibility/manager"
-	"go.temporal.io/server/common/quotas"
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/telemetry"
 	"go.temporal.io/server/service/history/deletemanager"
@@ -83,22 +81,16 @@ func (f *timerQueueFactory) CreateQueue(
 		f.VisibilityManager,
 	)
 
-	schedulerRateLimiter := f.SchedulerRateLimiter
-	shadowMode := f.Config.TaskSchedulerEnableRateLimiterShadowMode
-	if !f.Config.TaskSchedulerEnableRateLimiter() {
-		schedulerRateLimiter = quotas.NoopRequestRateLimiter
-		shadowMode = dynamicconfig.GetBoolPropertyFn(false)
-	}
-
 	shardScheduler := queues.NewRateLimitedScheduler(
 		f.HostScheduler,
 		queues.RateLimitedSchedulerOptions{
-			EnableShadowMode: shadowMode,
+			Enabled:          f.Config.TaskSchedulerEnableRateLimiter,
+			EnableShadowMode: f.Config.TaskSchedulerEnableRateLimiterShadowMode,
 			StartupDelay:     f.Config.TaskSchedulerRateLimiterStartupDelay,
 		},
 		currentClusterName,
 		f.NamespaceRegistry,
-		schedulerRateLimiter,
+		f.SchedulerRateLimiter,
 		f.TimeSource,
 		logger,
 		metricsHandler,
