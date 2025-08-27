@@ -67,7 +67,7 @@ func (f *visibilityQueueFactory) CreateQueue(
 ) queues.Queue {
 	logger := log.With(shard.GetLogger(), tag.ComponentVisibilityQueue)
 	metricsHandler := f.MetricsHandler.WithTags(metrics.OperationTag(metrics.OperationVisibilityQueueProcessorScope))
-	
+
 	shardScheduler := queues.NewRateLimitedScheduler(
 		f.HostScheduler,
 		queues.RateLimitedSchedulerOptions{

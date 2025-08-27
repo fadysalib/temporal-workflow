@@ -124,7 +124,7 @@ func (f *archivalQueueFactory) newArchivalTaskExecutor(shard historyi.ShardConte
 func (f *archivalQueueFactory) newScheduledQueue(shard historyi.ShardContext, executor queues.Executor) queues.Queue {
 	logger := log.With(shard.GetLogger(), tag.ComponentArchivalQueue)
 	metricsHandler := f.MetricsHandler.WithTags(metrics.OperationTag(metrics.OperationArchivalQueueProcessorScope))
-	
+
 	shardScheduler := queues.NewRateLimitedScheduler(
 		f.HostScheduler,
 		queues.RateLimitedSchedulerOptions{
