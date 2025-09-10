@@ -67,15 +67,15 @@ func (mr *MockQueueMockRecorder) FailoverNamespace(namespaceID any) *gomock.Call
 }
 
 // NotifyNewTasks mocks base method.
-func (m *MockQueue) NotifyNewTasks(arg0 []tasks.Task) {
+func (m *MockQueue) NotifyNewTasks(tasks []tasks.Task) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "NotifyNewTasks", arg0)
+	m.ctrl.Call(m, "NotifyNewTasks", tasks)
 }
 
 // NotifyNewTasks indicates an expected call of NotifyNewTasks.
-func (mr *MockQueueMockRecorder) NotifyNewTasks(arg0 any) *gomock.Call {
+func (mr *MockQueueMockRecorder) NotifyNewTasks(tasks any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyNewTasks", reflect.TypeOf((*MockQueue)(nil).NotifyNewTasks), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyNewTasks", reflect.TypeOf((*MockQueue)(nil).NotifyNewTasks), tasks)
 }
 
 // Start mocks base method.
