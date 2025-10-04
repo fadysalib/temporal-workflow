@@ -51,6 +51,8 @@ type (
 		NamespaceDefaults NamespaceDefaults `yaml:"namespaceDefaults"`
 		// ExporterConfig allows the specification of process-wide OTEL exporters
 		ExporterConfig telemetry.ExportConfig `yaml:"otel"`
+		// Visibility related config
+		Visibility Visibility `yaml:"visibility"`
 	}
 
 	// Service contains the service specific config items
@@ -254,14 +256,14 @@ type (
 	// Persistence contains the configuration for data store / persistence layer
 	Persistence struct {
 		// DefaultStore is the name of the default data store to use
-		DefaultStore string `yaml:"defaultStore" validate:"nonzero"`
+		DefaultStore string `yaml:"defaultStore" validate:"required"`
 		// VisibilityStore is the name of the datastore to be used for visibility records
 		VisibilityStore string `yaml:"visibilityStore"`
 		// SecondaryVisibilityStore is the name of the secondary datastore to be used for visibility records
 		SecondaryVisibilityStore string `yaml:"secondaryVisibilityStore"`
 		// NumHistoryShards is the desired number of history shards. This config doesn't
 		// belong here, needs refactoring
-		NumHistoryShards int32 `yaml:"numHistoryShards" validate:"nonzero"`
+		NumHistoryShards int32 `yaml:"numHistoryShards" validate:"required"`
 		// DataStores contains the configuration for all datastores
 		DataStores map[string]DataStore `yaml:"datastores"`
 		// TransactionSizeLimit is the largest allowed transaction size
@@ -345,7 +347,7 @@ type (
 	// Cassandra contains configuration to connect to Cassandra cluster
 	Cassandra struct {
 		// Hosts is a csv of cassandra endpoints
-		Hosts string `yaml:"hosts" validate:"nonzero"`
+		Hosts string `yaml:"hosts" validate:"required"`
 		// Port is the cassandra port used for connection by gocql client
 		Port int `yaml:"port"`
 		// User is the cassandra user used for authentication by gocql client
@@ -355,7 +357,7 @@ type (
 		// AllowedAuthenticators is the optional list of authenticators the gocql client checks before approving the challenge request from the server.
 		AllowedAuthenticators []string `yaml:"allowedAuthenticators"`
 		// keyspace is the cassandra keyspace
-		Keyspace string `yaml:"keyspace" validate:"nonzero"`
+		Keyspace string `yaml:"keyspace" validate:"required"`
 		// Datacenter is the data center filter arg for cassandra
 		Datacenter string `yaml:"datacenter"`
 		// MaxConns is the max number of connections to this datastore for a single keyspace
@@ -407,13 +409,13 @@ type (
 		// Password is the password corresponding to the user name
 		Password string `yaml:"password"`
 		// PluginName is the name of SQL plugin
-		PluginName string `yaml:"pluginName" validate:"nonzero"`
+		PluginName string `yaml:"pluginName" validate:"required"`
 		// DatabaseName is the name of SQL database to connect to
-		DatabaseName string `yaml:"databaseName" validate:"nonzero"`
+		DatabaseName string `yaml:"databaseName" validate:"required"`
 		// ConnectAddr is the remote addr of the database
-		ConnectAddr string `yaml:"connectAddr" validate:"nonzero"`
+		ConnectAddr string `yaml:"connectAddr" validate:"required"`
 		// ConnectProtocol is the protocol that goes with the ConnectAddr ex - tcp, unix
-		ConnectProtocol string `yaml:"connectProtocol" validate:"nonzero"`
+		ConnectProtocol string `yaml:"connectProtocol" validate:"required"`
 		// ConnectAttributes is a set of key-value attributes to be sent as part of connect data_source_name url
 		ConnectAttributes map[string]string `yaml:"connectAttributes"`
 		// MaxConns the max number of connections to this datastore
@@ -434,6 +436,12 @@ type (
 	CustomDatastoreConfig struct {
 		// Name of the custom datastore
 		Name string `yaml:"name"`
+		// IndexName represents a unique identifier for the data store.
+		// The name "IndexName" inherits from the Elasticsearch config and refers to the index name.
+		// In SQL, it refers to the database name.
+		// For custom data store, you may pick any name as long as it's unique across custom data
+		// stores (Elasticsearch index names and SQL database names).
+		IndexName string `yaml:"indexName"`
 		// Options to be used by AbstractDatastoreFactory implementation
 		Options map[string]any `yaml:"options"`
 	}
@@ -571,6 +579,25 @@ type (
 		State string `yaml:"state"`
 		// URI is the namespace default URI for visibility archiver
 		URI string `yaml:"URI"`
+	}
+
+	Visibility struct {
+		// PersistenceCustomSearchAttributes is a set of key-value pairs specifying the number of
+		// pre-allocated custom search attributes for each type. Pre-allocated custom search attributes
+		// are named following the convention `<type><seq>` (eg. Keyword01) and are expected to exist in
+		// the data store (eg. SQL DB table column Keyword01 must exist). The pre-allocated custom search
+		// attributes serves as a limit for the number of custom search attributes you can create per
+		// namespace.
+		// If any type is not specified, it will pre-allocate the default number of custom search
+		// attributes for the type defined in the map defaultNumDbCustomSearchAttributes in
+		// common/searchattribute/defs.go.
+		// Modifying the number of pre-allocated custom search attributes:
+		// - if you increase a number, it will pre-allocate additional custom search attributes to match
+		//   the desired number;
+		// - if you decrease a number, it will not delete the existing custom search attributes, ie., it
+		//   is no-op.
+		// This config only applies to SQL or custom Visibility stores.
+		PersistenceCustomSearchAttributes map[string]int `yaml:"persistenceCustomSearchAttributes" validate:"dive,keys,search_attribute_type,endkeys,gte=0,lte=99"`
 	}
 
 	Authorization struct {
