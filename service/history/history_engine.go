@@ -575,7 +575,7 @@ func (e *historyEngineImpl) RespondActivityTaskCompleted(
 	return respondactivitytaskcompleted.Invoke(ctx, req, e.shardContext, e.workflowConsistencyChecker)
 }
 
-// RespondActivityTaskFailed completes an activity task failure.
+// RespondActivityTaskFailed fails an activity task.
 func (e *historyEngineImpl) RespondActivityTaskFailed(
 	ctx context.Context,
 	req *historyservice.RespondActivityTaskFailedRequest,
@@ -583,7 +583,7 @@ func (e *historyEngineImpl) RespondActivityTaskFailed(
 	return respondactivitytaskfailed.Invoke(ctx, req, e.shardContext, e.workflowConsistencyChecker)
 }
 
-// RespondActivityTaskCanceled completes an activity task failure.
+// RespondActivityTaskCanceled cancels an activity task.
 func (e *historyEngineImpl) RespondActivityTaskCanceled(
 	ctx context.Context,
 	req *historyservice.RespondActivityTaskCanceledRequest,

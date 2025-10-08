@@ -350,6 +350,8 @@ func (h *Handler) RecordActivityTaskStarted(ctx context.Context, request *histor
 		return nil, h.convertError(err)
 	}
 
+	ctx = chasm.NewEngineContext(ctx, h.chasmEngine)
+
 	response, err := engine.RecordActivityTaskStarted(ctx, request)
 	if err != nil {
 		return nil, h.convertError(err)
@@ -432,6 +434,8 @@ func (h *Handler) RespondActivityTaskCompleted(ctx context.Context, request *his
 		return nil, h.convertError(err)
 	}
 
+	ctx = chasm.NewEngineContext(ctx, h.chasmEngine)
+
 	resp, err2 := engine.RespondActivityTaskCompleted(ctx, request)
 	if err2 != nil {
 		return nil, h.convertError(err2)
@@ -470,6 +474,8 @@ func (h *Handler) RespondActivityTaskFailed(ctx context.Context, request *histor
 		return nil, h.convertError(err)
 	}
 
+	ctx = chasm.NewEngineContext(ctx, h.chasmEngine)
+
 	resp, err2 := engine.RespondActivityTaskFailed(ctx, request)
 	if err2 != nil {
 		return nil, h.convertError(err2)
@@ -507,6 +513,8 @@ func (h *Handler) RespondActivityTaskCanceled(ctx context.Context, request *hist
 	if err != nil {
 		return nil, h.convertError(err)
 	}
+
+	ctx = chasm.NewEngineContext(ctx, h.chasmEngine)
 
 	resp, err2 := engine.RespondActivityTaskCanceled(ctx, request)
 	if err2 != nil {
@@ -2389,6 +2397,13 @@ func (h *Handler) convertError(err error) error {
 
 func validateTaskToken(taskToken *tokenspb.Task) error {
 	if taskToken.GetWorkflowId() == "" {
+		// TODO(dan): The frontend handler for RespondActivityTaskCompleted constructs a task token
+		// to send to history, but that task token will have no workflow ID for a CHASM activity. I
+		// assume that ScheduledEventId should always be present for a genuine workflow activity, so
+		// doing this for now:
+		if taskToken.GetScheduledEventId() == common.EmptyEventID {
+			return nil
+		}
 		return errWorkflowIDNotSet
 	}
 	return nil

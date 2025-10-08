@@ -12,6 +12,7 @@ import (
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	chasmactivity "go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/metrics"
@@ -42,6 +43,10 @@ func Invoke(
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 	matchingClient matchingservice.MatchingServiceClient,
 ) (resp *historyservice.RecordActivityTaskStartedResponse, retError error) {
+
+	if chasmactivity.ShouldHandle(request) {
+		return chasmactivity.HandleRecordActivityTaskStarted(ctx, request)
+	}
 
 	var err error
 	response := &historyservice.RecordActivityTaskStartedResponse{}

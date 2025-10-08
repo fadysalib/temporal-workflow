@@ -88,3 +88,25 @@ var TransitionTimedOut = chasm.NewTransition(
 		return nil
 	},
 )
+
+var TransitionCancelRequested = chasm.NewTransition(
+	[]activitypb.ActivityExecutionStatus{
+		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+	},
+	activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
+	func(_ *Activity, _ chasm.MutableContext, _ any) error {
+		return nil
+	},
+)
+
+var TransitionCanceled = chasm.NewTransition(
+	[]activitypb.ActivityExecutionStatus{
+		activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
+	},
+	activitypb.ACTIVITY_EXECUTION_STATUS_CANCELED,
+	func(_ *Activity, _ chasm.MutableContext, _ any) error {
+		return nil
+	},
+)

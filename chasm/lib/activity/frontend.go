@@ -5,6 +5,7 @@ import (
 
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
+	"go.temporal.io/server/common/namespace"
 )
 
 type FrontendHandler interface {
@@ -20,18 +21,51 @@ type FrontendHandler interface {
 
 type frontendHandler struct {
 	FrontendHandler
-	client activitypb.ActivityServiceClient
+	client            activitypb.ActivityServiceClient
+	namespaceRegistry namespace.Registry
 }
 
-func NewFrontendHandler(client activitypb.ActivityServiceClient) FrontendHandler {
+func NewFrontendHandler(client activitypb.ActivityServiceClient, namespaceRegistry namespace.Registry) FrontendHandler {
 	return &frontendHandler{
-		client: client,
+		client:            client,
+		namespaceRegistry: namespaceRegistry,
 	}
 }
 
 func (h *frontendHandler) StartActivityExecution(ctx context.Context, req *workflowservice.StartActivityExecutionRequest) (*workflowservice.StartActivityExecutionResponse, error) {
+	namespaceID, err := h.namespaceRegistry.GetNamespaceID(namespace.Name(req.GetNamespace()))
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := h.client.StartActivityExecution(ctx, &activitypb.StartActivityExecutionRequest{
-		// NamespaceId
+		NamespaceId:     namespaceID.String(),
+		FrontendRequest: req,
+	})
+	return resp.GetFrontendResponse(), err
+}
+
+func (h *frontendHandler) DescribeActivityExecution(ctx context.Context, req *workflowservice.DescribeActivityExecutionRequest) (*workflowservice.DescribeActivityExecutionResponse, error) {
+	namespaceID, err := h.namespaceRegistry.GetNamespaceID(namespace.Name(req.GetNamespace()))
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := h.client.DescribeActivityExecution(ctx, &activitypb.DescribeActivityExecutionRequest{
+		NamespaceId:     namespaceID.String(),
+		FrontendRequest: req,
+	})
+	return resp.GetFrontendResponse(), err
+}
+
+func (h *frontendHandler) GetActivityExecutionResult(ctx context.Context, req *workflowservice.GetActivityExecutionResultRequest) (*workflowservice.GetActivityExecutionResultResponse, error) {
+	namespaceID, err := h.namespaceRegistry.GetNamespaceID(namespace.Name(req.GetNamespace()))
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := h.client.GetActivityExecutionResult(ctx, &activitypb.GetActivityExecutionResultRequest{
+		NamespaceId:     namespaceID.String(),
 		FrontendRequest: req,
 	})
 	return resp.GetFrontendResponse(), err

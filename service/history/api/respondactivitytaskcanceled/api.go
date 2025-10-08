@@ -6,6 +6,8 @@ import (
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
+	"go.temporal.io/server/chasm"
+	chasmactivity "go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/metrics"
@@ -34,6 +36,13 @@ func Invoke(
 	token, err0 := tokenSerializer.Deserialize(request.TaskToken)
 	if err0 != nil {
 		return nil, consts.ErrDeserializingToken
+	}
+	if chasmactivity.ShouldHandleTaskToken(req, token) {
+		return chasmactivity.HandleRespondActivityTaskCanceled(ctx, req, chasm.EntityKey{
+			NamespaceID: token.NamespaceId,
+			BusinessID:  token.ActivityId,
+			EntityID:    token.RunId,
+		})
 	}
 	if err := api.SetActivityTaskRunID(ctx, token, workflowConsistencyChecker); err != nil {
 		return nil, err
