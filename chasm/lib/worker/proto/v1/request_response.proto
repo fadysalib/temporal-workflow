@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package temporal.server.chasm.lib.worker.proto.v1;
+
+option go_package = "go.temporal.io/server/chasm/lib/worker/gen/workerpb;workerpb";
+
+import "google/protobuf/duration.proto";
+import "temporal/api/worker/v1/message.proto";
+
+message RecordHeartbeatRequest {
+    // Internal namespace ID (UUID).
+    string namespace_id = 1;
+
+    // Worker heartbeat information including metadata and capabilities.
+    temporal.api.worker.v1.WorkerHeartbeat worker_heartbeat = 2;
+
+    // Duration for which the worker lease should be valid.
+    // Server will calculate the actual expiration time based on when it receives this request.
+    google.protobuf.Duration lease_duration = 3;
+}
+
+message RecordHeartbeatResponse {
+}
