@@ -259,12 +259,42 @@ func (e *ChasmEngine) PollComponent(
 	opts ...chasm.TransitionOption,
 ) (newEntityRef []byte, err error) {
 
+	// TODO: Implement concurrent poller limits
+	// As Yichao mentioned: "I do think we should enforce some limit on the concurrent pollers"
+	// Need to track and limit concurrent pollers per execution:
+	// - Add a poller registration mechanism
+	// - Return an error if max concurrent pollers exceeded
+	// - Consider using a semaphore or similar mechanism
+	// if err := e.registerPoller(entityRef); err != nil {
+	//     return nil, serviceerror.NewResourceExhausted("too many concurrent pollers for execution")
+	// }
+	// defer e.unregisterPoller(entityRef)
+
 	// if operationFn != nil {
 	// 	return nil, fmt.Errorf("PollComponent operationFn not supported (TODO: remove from interface)")
 	// }
 
 	newEntityRef, shardContext, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, entityRef, predicateFn)
 	if err != nil {
+		// TODO: Distinguish between stale reference and stale state errors
+		// As per transcript:
+		// - Stale reference: Failed precondition, client needs to update its view, not retryable
+		// - Stale state: Targeting wrong shard owner, potentially retryable
+		//
+		// var staleRefErr *consts.ErrStaleReference
+		// if errors.As(err, &staleRefErr) {
+		//     // This is a failed precondition - return specific error
+		//     executionLease.GetReleaseFn()(nil)
+		//     return nil, serviceerror.NewFailedPrecondition("stale reference: %v", err)
+		// }
+		//
+		// var staleStateErr *consts.ErrStaleState
+		// if errors.As(err, &staleStateErr) {
+		//     // Could retry with reload, but for now just fail
+		//     executionLease.GetReleaseFn()(nil)
+		//     return nil, serviceerror.NewUnavailable("stale state: %v", err)
+		// }
+
 		executionLease.GetReleaseFn()(nil)
 		return nil, err
 	}
@@ -333,13 +363,35 @@ func (e *ChasmEngine) PollComponent(
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "⬇️ Received notification (subscriber: %s)\n", subscriberID[:8])
-			_ = notification // TODO: use notification data for staleness checks
+
+			// TODO: Notification staleness check (see get_workflow_util.go:220-222)
+			// The notification might be out of date if sent before our initial check.
+			// Need to compare notification's versioned transition with our expected state:
+			//
+			// if notification.TransitionHistory != nil && len(notification.TransitionHistory) > 0 {
+			//     notificationVT := notification.TransitionHistory[len(notification.TransitionHistory)-1]
+			//     if notificationVT.GetTransitionCount() < entityRef.entityLastUpdateVT.GetTransitionCount() {
+			//         // Notification is stale, ignore it
+			//         continue
+			//     }
+			// }
+
 			// Received a notification. Re-acquire the lock and check the predicate.
 			newEntityRef, _, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, entityRef, predicateFn)
 
 			if err != nil {
-				// TODO: If the error was failure to acquire the lock, check how we should handle
-				// that. What are common reasons for failing to acquire the lock?
+				// TODO: Handle different error types
+				// Common reasons for failing to acquire lock:
+				// 1. Shard ownership lost (shard movement)
+				// 2. Entity deleted/completed
+				// 3. Stale reference
+				// 4. Context workflow not found
+				//
+				// Need to check error type and potentially:
+				// - Return ShardOwnershipLost error for retry by frontend
+				// - Return NotFound if entity no longer exists
+				// - Return FailedPrecondition for stale reference
+
 				executionLease.GetReleaseFn()(nil)
 				return nil, err
 			}
@@ -348,8 +400,16 @@ func (e *ChasmEngine) PollComponent(
 				return newEntityRef, nil
 			}
 
-			// TODO: staleness checks (check for stale notification)
-			// cf. get_workflow_util.go:220-222 which checks if notification is out of date
+			// TODO: Additional staleness check after re-acquiring lock
+			// Compare the new entityRef's versioned transition with what we started with
+			// to ensure we haven't gone backwards (e.g., due to shard movement and reload)
+			//
+			// deserializedNewRef, _ := chasm.DeserializeComponentRef(newEntityRef)
+			// if deserializedNewRef.entityLastUpdateVT.GetTransitionCount() < entityRef.entityLastUpdateVT.GetTransitionCount() {
+			//     // We've gone backwards - this shouldn't happen
+			//     executionLease.GetReleaseFn()(nil)
+			//     return nil, serviceerror.NewInternal("state regression detected")
+			// }
 
 			// Condition still not met, release lock and continue polling
 			executionLease.GetReleaseFn()(nil)
@@ -385,6 +445,19 @@ func (e *ChasmEngine) getExecutionLeaseAndCheckPredicate(
 	// Obtain chasm tree with lock
 	// cf. service/history/api/get_workflow_util.go:60-68 (GetMutableStateWithConsistencyCheck)
 	// cf. get_workflow_util.go:137-144 (state reloaded after notification)
+
+	// TODO: As discussed in the transcript, we need to use getExecutionLease which
+	// already does consistency checks (see chasm_engine.go:550-604).
+	// However, we should enhance it to:
+	// 1. Check version transition staleness (like GetWorkflowLeaseWithConsistencyCheck)
+	// 2. Potentially reload state if stale
+	// 3. Distinguish between stale reference and stale state
+	//
+	// The current getExecutionLease already has some of this logic:
+	// - It checks if the ref is stale using chasmTree.IsStale(ref)
+	// - It distinguishes between ErrStaleState (reload needed) and stale reference
+	// But we may need to enhance it further for long-polling scenarios
+
 	shardContext, executionLease, err := e.getExecutionLease(ctx, entityRef)
 	if err != nil {
 		return nil, nil, nil, err
@@ -731,6 +804,14 @@ func (e *ChasmEngine) getExecutionLease(
 		return nil, nil, err
 	}
 
+	// TODO: Check shard ownership before proceeding
+	// As discussed, shard ownership can be lost due to shard movement.
+	// Need to verify this shard still owns the entity:
+	//
+	// if !shardContext.GetShardOwnership().IsValid() {
+	//     return nil, nil, consts.ErrShardOwnershipLost
+	// }
+
 	consistencyChecker := api.NewWorkflowConsistencyChecker(
 		shardContext,
 		e.entityCache,
@@ -752,14 +833,34 @@ func (e *ChasmEngine) getExecutionLease(
 		ctx,
 		nil,
 		func(mutableState historyi.MutableState) bool {
+			// This predicate function performs staleness checks as described by Yichao.
+			// It returns false if state needs to be reloaded, true if state is acceptable.
+
+			// First check: Is the component ref stale against current tree?
 			err := mutableState.ChasmTree().IsStale(ref)
 			if errors.Is(err, consts.ErrStaleState) {
+				// State is stale and needs reload (returns false to trigger reload)
+				// This happens when versioned transition has moved forward
 				return false
 			}
 
-			// Reference itself might be stale.
+			// Reference itself might be stale (version has gone backwards or branch changed).
 			// No need to reload mutable state in this case, but request should be failed.
 			staleReferenceErr = err
+
+			// TODO: Additional version transition checks as per transcript
+			// Check that ref.entityLastUpdateVT is on the current transition history:
+			//
+			// if ref.entityLastUpdateVT != nil {
+			//     transitionHistory := mutableState.GetExecutionInfo().GetTransitionHistory()
+			//     if !transitionhistory.ContainsVersionedTransition(transitionHistory, ref.entityLastUpdateVT) {
+			//         // The reference points to a non-current branch
+			//         staleReferenceErr = serviceerror.NewFailedPrecondition(
+			//             "version transition not on current branch")
+			//         return true // Don't reload, just fail
+			//     }
+			// }
+
 			return true
 		},
 		definition.NewWorkflowKey(
@@ -770,6 +871,15 @@ func (e *ChasmEngine) getExecutionLease(
 		archetype,
 		lockPriority,
 	)
+
+	// TODO: After acquiring lease, verify shard ownership again
+	// Shard could have moved between initial check and lock acquisition:
+	//
+	// if entityLease != nil && !shardContext.GetShardOwnership().IsValid() {
+	//     entityLease.GetReleaseFn()(nil)
+	//     return nil, nil, consts.ErrShardOwnershipLost
+	// }
+
 	if err == nil && staleReferenceErr != nil {
 		entityLease.GetReleaseFn()(nil)
 		err = staleReferenceErr
@@ -787,9 +897,26 @@ func notifyChasmComponentUpdate(
 	if err != nil {
 		return err
 	}
-	// TODO
-	// For now we do not send any information with the notification; the subscriber must read the
-	// component data again.
+
+	// TODO: Include proper versioned transition information in notification
+	// As discussed in the transcript, notifications should include transition history
+	// so subscribers can check for staleness without re-acquiring the lock.
+	//
+	// Currently we're sending minimal info, but should include:
+	// 1. The current versioned transition from entityRef.entityLastUpdateVT
+	// 2. Potentially the full transition history for staleness checks
+	//
+	// Example of what should be sent:
+	// transitionHistory := []*persistencespb.VersionedTransition{
+	//     entityRef.entityLastUpdateVT,
+	// }
+	//
+	// Also consider including namespace failover version and other metadata
+	// that would help with staleness detection on the receiver side.
+
+	// For now we do not send full information; the subscriber must read the
+	// component data again. This is a temporary hack using special values
+	// to distinguish CHASM notifications.
 	engine.NotifyNewHistoryEvent(events.NewNotification(
 		entityRef.NamespaceID,
 		&commonpb.WorkflowExecution{
@@ -800,12 +927,12 @@ func notifyChasmComponentUpdate(
 		-1,
 		-1,
 		-1,
-		enumsspb.WORKFLOW_EXECUTION_STATE_UNSPECIFIED,
-		enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED,
+		enumsspb.WORKFLOW_EXECUTION_STATE_UNSPECIFIED, // Special marker for CHASM
+		enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED, // Special marker for CHASM
 		&historyspb.VersionHistories{
 			Histories: []*historyspb.VersionHistory{},
 		},
-		nil,
+		nil, // TODO: Should include entityRef.entityLastUpdateVT here
 	))
 	return nil
 }
