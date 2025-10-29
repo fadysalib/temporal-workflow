@@ -41,6 +41,13 @@ const (
 	Archetype chasm.Archetype = "Worker"
 )
 
+// HeartbeatRequest is the internal request for CHASM component updates
+type HeartbeatRequest struct {
+	WorkerHeartbeat *workerpb.WorkerHeartbeat
+	LeaseDuration   time.Duration
+}
+
+// Worker is a Chasm component that tracks worker heartbeats and manages worker lifecycle.
 type Worker struct {
 	chasm.UnimplementedComponent
 
