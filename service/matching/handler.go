@@ -9,10 +9,12 @@ import (
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	workerpb "go.temporal.io/api/worker/v1"
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/log"
+	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/membership"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
@@ -28,6 +30,7 @@ import (
 	"go.uber.org/fx"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type (
@@ -43,6 +46,7 @@ type (
 		throttledLogger   log.Logger
 		namespaceRegistry namespace.Registry
 		workersRegistry   workers.Registry
+		historyClient     resource.HistoryClient
 	}
 
 	HandlerParams struct {
@@ -115,6 +119,7 @@ func NewHandler(
 		),
 		namespaceRegistry: params.NamespaceRegistry,
 		workersRegistry:   params.WorkersRegistry,
+		historyClient:     params.HistoryClient,
 	}
 
 	// prevent from serving requests before matching engine is started and ready
@@ -549,13 +554,50 @@ func (h *Handler) ListNexusEndpoints(ctx context.Context, request *matchingservi
 
 // RecordWorkerHeartbeat receive heartbeat request from the worker.
 func (h *Handler) RecordWorkerHeartbeat(
-	_ context.Context, request *matchingservice.RecordWorkerHeartbeatRequest,
+	ctx context.Context, request *matchingservice.RecordWorkerHeartbeatRequest,
 ) (*matchingservice.RecordWorkerHeartbeatResponse, error) {
 	nsID := namespace.ID(request.GetNamespaceId())
 	nsName := h.namespaceName(nsID)
 
+	// Continue updating in-memory registry (existing functionality)
 	h.workersRegistry.RecordWorkerHeartbeats(nsID, nsName, request.GetHeartbeartRequest().GetWorkerHeartbeat())
+
+	// Also create/update CHASM WorkerSession entities in History service
+	h.recordWorkerSessionsInHistory(ctx, nsID, request.GetHeartbeartRequest().GetWorkerHeartbeat())
+
 	return &matchingservice.RecordWorkerHeartbeatResponse{}, nil
+}
+
+func (h *Handler) recordWorkerSessionsInHistory(
+	ctx context.Context,
+	nsID namespace.ID,
+	heartbeats []*workerpb.WorkerHeartbeat,
+) {
+	// Check if WorkerSession feature is enabled via dynamic config
+	if !h.config.EnableWorkerSession() {
+		return
+	}
+
+	for _, hb := range heartbeats {
+		// Calculate client-side lease deadline (30 seconds from now)
+		leaseDeadline := time.Now().Add(30 * time.Second)
+
+		// Call History service to create/update WorkerSession
+		_, err := h.historyClient.RecordWorkerHeartbeat(ctx, &historyservice.RecordWorkerHeartbeatRequest{
+			NamespaceId:         nsID.String(),
+			WorkerInstanceKey:   hb.WorkerInstanceKey,
+			LeaseExpirationTime: timestamppb.New(leaseDeadline),
+		})
+
+		if err != nil {
+			// Log error but don't fail the heartbeat - maintain backward compatibility
+			h.logger.Warn("Failed to record WorkerSession in History service",
+				tag.Error(err),
+				tag.NewStringTag("worker-instance-key", hb.WorkerInstanceKey),
+				tag.WorkflowNamespaceID(nsID.String()),
+			)
+		}
+	}
 }
 
 // ListWorkers retrieves a list of workers in the specified namespace that match the provided filters.
