@@ -1313,3 +1313,14 @@ message UpdateWorkflowExecutionOptionsResponse {
     // Workflow Execution options after update.
     temporal.api.workflow.v1.WorkflowExecutionOptions workflow_execution_options = 1;
 }
+
+message RecordWorkerHeartbeatRequest {
+    option (routing).custom = true;
+
+    string namespace_id = 1;
+    string worker_instance_key = 2;
+    google.protobuf.Timestamp lease_expiration_time = 3;
+}
+
+message RecordWorkerHeartbeatResponse {
+}

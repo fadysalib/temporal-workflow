@@ -422,4 +422,8 @@ service HistoryService {
     rpc ResetActivity (ResetActivityRequest) returns (ResetActivityResponse) {
     }
 
+    // RecordWorkerHeartbeat creates or updates a WorkerSession CHASM entity to track worker liveness.
+    rpc RecordWorkerHeartbeat (RecordWorkerHeartbeatRequest) returns (RecordWorkerHeartbeatResponse) {
+    }
+
 }

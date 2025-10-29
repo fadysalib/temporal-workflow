@@ -5628,3 +5628,77 @@ func (this *UpdateWorkflowExecutionOptionsResponse) Equal(that interface{}) bool
 
 	return proto.Equal(this, that1)
 }
+
+// Marshal an object of type RecordWorkerHeartbeatRequest to the protobuf v3 wire format
+func (val *RecordWorkerHeartbeatRequest) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type RecordWorkerHeartbeatRequest from the protobuf v3 wire format
+func (val *RecordWorkerHeartbeatRequest) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *RecordWorkerHeartbeatRequest) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two RecordWorkerHeartbeatRequest values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *RecordWorkerHeartbeatRequest) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *RecordWorkerHeartbeatRequest
+	switch t := that.(type) {
+	case *RecordWorkerHeartbeatRequest:
+		that1 = t
+	case RecordWorkerHeartbeatRequest:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type RecordWorkerHeartbeatResponse to the protobuf v3 wire format
+func (val *RecordWorkerHeartbeatResponse) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type RecordWorkerHeartbeatResponse from the protobuf v3 wire format
+func (val *RecordWorkerHeartbeatResponse) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *RecordWorkerHeartbeatResponse) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two RecordWorkerHeartbeatResponse values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *RecordWorkerHeartbeatResponse) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *RecordWorkerHeartbeatResponse
+	switch t := that.(type) {
+	case *RecordWorkerHeartbeatResponse:
+		that1 = t
+	case RecordWorkerHeartbeatResponse:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}

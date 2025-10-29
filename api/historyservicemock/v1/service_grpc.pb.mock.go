@@ -883,6 +883,26 @@ func (mr *MockHistoryServiceClientMockRecorder) RecordChildExecutionCompleted(ct
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordChildExecutionCompleted", reflect.TypeOf((*MockHistoryServiceClient)(nil).RecordChildExecutionCompleted), varargs...)
 }
 
+// RecordWorkerHeartbeat mocks base method.
+func (m *MockHistoryServiceClient) RecordWorkerHeartbeat(ctx context.Context, in *historyservice.RecordWorkerHeartbeatRequest, opts ...grpc.CallOption) (*historyservice.RecordWorkerHeartbeatResponse, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, in}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "RecordWorkerHeartbeat", varargs...)
+	ret0, _ := ret[0].(*historyservice.RecordWorkerHeartbeatResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RecordWorkerHeartbeat indicates an expected call of RecordWorkerHeartbeat.
+func (mr *MockHistoryServiceClientMockRecorder) RecordWorkerHeartbeat(ctx, in any, opts ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, in}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordWorkerHeartbeat", reflect.TypeOf((*MockHistoryServiceClient)(nil).RecordWorkerHeartbeat), varargs...)
+}
+
 // RecordWorkflowTaskStarted mocks base method.
 func (m *MockHistoryServiceClient) RecordWorkflowTaskStarted(ctx context.Context, in *historyservice.RecordWorkflowTaskStartedRequest, opts ...grpc.CallOption) (*historyservice.RecordWorkflowTaskStartedResponse, error) {
 	m.ctrl.T.Helper()
@@ -2273,6 +2293,21 @@ func (m *MockHistoryServiceServer) RecordChildExecutionCompleted(arg0 context.Co
 func (mr *MockHistoryServiceServerMockRecorder) RecordChildExecutionCompleted(arg0, arg1 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordChildExecutionCompleted", reflect.TypeOf((*MockHistoryServiceServer)(nil).RecordChildExecutionCompleted), arg0, arg1)
+}
+
+// RecordWorkerHeartbeat mocks base method.
+func (m *MockHistoryServiceServer) RecordWorkerHeartbeat(arg0 context.Context, arg1 *historyservice.RecordWorkerHeartbeatRequest) (*historyservice.RecordWorkerHeartbeatResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordWorkerHeartbeat", arg0, arg1)
+	ret0, _ := ret[0].(*historyservice.RecordWorkerHeartbeatResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RecordWorkerHeartbeat indicates an expected call of RecordWorkerHeartbeat.
+func (mr *MockHistoryServiceServerMockRecorder) RecordWorkerHeartbeat(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordWorkerHeartbeat", reflect.TypeOf((*MockHistoryServiceServer)(nil).RecordWorkerHeartbeat), arg0, arg1)
 }
 
 // RecordWorkflowTaskStarted mocks base method.

@@ -597,6 +597,20 @@ func (c *metricClient) RecordChildExecutionCompleted(
 	return c.client.RecordChildExecutionCompleted(ctx, request, opts...)
 }
 
+func (c *metricClient) RecordWorkerHeartbeat(
+	ctx context.Context,
+	request *historyservice.RecordWorkerHeartbeatRequest,
+	opts ...grpc.CallOption,
+) (_ *historyservice.RecordWorkerHeartbeatResponse, retError error) {
+
+	metricsHandler, startTime := c.startMetricsRecording(ctx, "HistoryClientRecordWorkerHeartbeat")
+	defer func() {
+		c.finishMetricsRecording(metricsHandler, startTime, retError)
+	}()
+
+	return c.client.RecordWorkerHeartbeat(ctx, request, opts...)
+}
+
 func (c *metricClient) RecordWorkflowTaskStarted(
 	ctx context.Context,
 	request *historyservice.RecordWorkflowTaskStartedRequest,
