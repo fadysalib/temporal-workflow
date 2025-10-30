@@ -127,9 +127,10 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 		defer close(activityPollDone)
 		// Second poll uses token and therefore waits for a state transition
 		activityPollResp, activityPollErr = s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
-			Namespace:  s.Namespace().String(),
-			ActivityId: activityID,
-			RunId:      startResp.RunId,
+			Namespace:   s.Namespace().String(),
+			ActivityId:  activityID,
+			RunId:       startResp.RunId,
+			IncludeInfo: true,
 			WaitPolicy: &workflowservice.PollActivityExecutionRequest_WaitAnyStateChange{
 				WaitAnyStateChange: &workflowservice.PollActivityExecutionRequest_StateChangeWaitOptions{
 					LongPollToken: firstPollResp.StateChangeLongPollToken,

@@ -278,15 +278,14 @@ func (a *Activity) buildActivityExecutionInfo(ctx chasm.Context, key chasm.Entit
 	}
 
 	info := &activity.ActivityExecutionInfo{
-		ActivityId:      key.BusinessID,
-		RunId:           key.EntityID,
-		ActivityType:    a.GetActivityType(),
-		ActivityOptions: a.GetActivityOptions(),
-		Status:          status,
-		RunState:        runState,
-		ScheduledTime:   a.GetScheduledTime(),
-		Priority:        a.GetPriority(),
-		Header:          requestData.GetHeader(),
+		ActivityId:    key.BusinessID,
+		RunId:         key.EntityID,
+		ActivityType:  a.GetActivityType(),
+		Status:        status,
+		RunState:      runState,
+		ScheduledTime: a.GetScheduledTime(),
+		Priority:      a.GetPriority(),
+		Header:        requestData.GetHeader(),
 
 		// TODO: These fields are left at zero value for now:
 		// - StartedTime

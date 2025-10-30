@@ -114,7 +114,7 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 					// Prev count unknown or less than new - capture new state and return
 					newStateChangeToken = []byte(strconv.FormatInt(newTransitionCount, 10))
 
-					if !request.ExcludeInfo {
+					if request.GetIncludeInfo() {
 						activityInfo, err = a.buildActivityExecutionInfo(ctx, chasm.EntityKey{
 							NamespaceID: req.GetNamespaceId(),
 							BusinessID:  request.GetActivityId(),
@@ -150,7 +150,7 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 					}
 					currentCount := ref.GetEntityLastUpdateVersionedTransition().GetTransitionCount()
 					newStateChangeToken = []byte(strconv.FormatInt(currentCount, 10))
-					if !request.ExcludeInfo {
+					if request.GetIncludeInfo() {
 						activityInfo, err = a.buildActivityExecutionInfo(ctx, chasm.EntityKey{
 							NamespaceID: req.GetNamespaceId(),
 							BusinessID:  request.GetActivityId(),
