@@ -191,3 +191,21 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 		},
 	}, nil
 }
+
+// serializeActivityPollToken serializes an ActivityPollToken to bytes.
+func serializeActivityPollToken(token *activitypb.ActivityLongPollToken) ([]byte, error) {
+	if token == nil {
+		return nil, nil
+	}
+	return token.Marshal()
+}
+
+// deserializeActivityPollToken deserializes bytes to an ActivityPollToken.
+func deserializeActivityPollToken(data []byte) (*activitypb.ActivityLongPollToken, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	token := &activitypb.ActivityLongPollToken{}
+	err := token.Unmarshal(data)
+	return token, err
+}

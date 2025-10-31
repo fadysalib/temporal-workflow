@@ -5,6 +5,7 @@ package temporal.server.chasm.lib.activity.proto.v1;
 option go_package = "go.temporal.io/server/chasm/lib/activity/gen/activitypb;activitypb";
 
 import "temporal/api/workflowservice/v1/request_response.proto";
+import "temporal/server/api/persistence/v1/hsm.proto";
 
 message StartActivityExecutionRequest {
     string namespace_id = 1;
@@ -24,4 +25,14 @@ message PollActivityExecutionRequest {
 
 message PollActivityExecutionResponse {
     temporal.api.workflowservice.v1.PollActivityExecutionResponse frontend_response = 1;
+}
+
+// ActivityLongPollToken is used to track state when long-polling an activity execution. It is
+// returned by PollActivityExecution and should be re-submitted by the caller with any subsequent
+// PollActivityExecution requests.
+message ActivityLongPollToken {
+    string namespace_id = 1;
+    string activity_id = 2;
+    string run_id = 3;
+    temporal.server.api.persistence.v1.VersionedTransition versioned_transition = 4;
 }

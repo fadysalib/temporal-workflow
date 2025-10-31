@@ -12,6 +12,7 @@ import (
 	unsafe "unsafe"
 
 	v1 "go.temporal.io/api/workflowservice/v1"
+	v11 "go.temporal.io/server/api/persistence/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
@@ -215,11 +216,82 @@ func (x *PollActivityExecutionResponse) GetFrontendResponse() *v1.PollActivityEx
 	return nil
 }
 
+// ActivityLongPollToken is used to track state when long-polling an activity execution. It is
+// returned by PollActivityExecution and should be re-submitted by the caller with any subsequent
+// PollActivityExecution requests.
+type ActivityLongPollToken struct {
+	state               protoimpl.MessageState   `protogen:"open.v1"`
+	NamespaceId         string                   `protobuf:"bytes,1,opt,name=namespace_id,json=namespaceId,proto3" json:"namespace_id,omitempty"`
+	ActivityId          string                   `protobuf:"bytes,2,opt,name=activity_id,json=activityId,proto3" json:"activity_id,omitempty"`
+	RunId               string                   `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	VersionedTransition *v11.VersionedTransition `protobuf:"bytes,4,opt,name=versioned_transition,json=versionedTransition,proto3" json:"versioned_transition,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ActivityLongPollToken) Reset() {
+	*x = ActivityLongPollToken{}
+	mi := &file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActivityLongPollToken) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActivityLongPollToken) ProtoMessage() {}
+
+func (x *ActivityLongPollToken) ProtoReflect() protoreflect.Message {
+	mi := &file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActivityLongPollToken.ProtoReflect.Descriptor instead.
+func (*ActivityLongPollToken) Descriptor() ([]byte, []int) {
+	return file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ActivityLongPollToken) GetNamespaceId() string {
+	if x != nil {
+		return x.NamespaceId
+	}
+	return ""
+}
+
+func (x *ActivityLongPollToken) GetActivityId() string {
+	if x != nil {
+		return x.ActivityId
+	}
+	return ""
+}
+
+func (x *ActivityLongPollToken) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ActivityLongPollToken) GetVersionedTransition() *v11.VersionedTransition {
+	if x != nil {
+		return x.VersionedTransition
+	}
+	return nil
+}
+
 var File_temporal_server_chasm_lib_activity_proto_v1_request_response_proto protoreflect.FileDescriptor
 
 const file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_rawDesc = "" +
 	"\n" +
-	"Btemporal/server/chasm/lib/activity/proto/v1/request_response.proto\x12+temporal.server.chasm.lib.activity.proto.v1\x1a6temporal/api/workflowservice/v1/request_response.proto\"\xad\x01\n" +
+	"Btemporal/server/chasm/lib/activity/proto/v1/request_response.proto\x12+temporal.server.chasm.lib.activity.proto.v1\x1a6temporal/api/workflowservice/v1/request_response.proto\x1a,temporal/server/api/persistence/v1/hsm.proto\"\xad\x01\n" +
 	"\x1dStartActivityExecutionRequest\x12!\n" +
 	"\fnamespace_id\x18\x01 \x01(\tR\vnamespaceId\x12i\n" +
 	"\x10frontend_request\x18\x02 \x01(\v2>.temporal.api.workflowservice.v1.StartActivityExecutionRequestR\x0ffrontendRequest\"\x8e\x01\n" +
@@ -229,7 +301,13 @@ const file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_ra
 	"\fnamespace_id\x18\x01 \x01(\tR\vnamespaceId\x12h\n" +
 	"\x10frontend_request\x18\x02 \x01(\v2=.temporal.api.workflowservice.v1.PollActivityExecutionRequestR\x0ffrontendRequest\"\x8c\x01\n" +
 	"\x1dPollActivityExecutionResponse\x12k\n" +
-	"\x11frontend_response\x18\x01 \x01(\v2>.temporal.api.workflowservice.v1.PollActivityExecutionResponseR\x10frontendResponseBDZBgo.temporal.io/server/chasm/lib/activity/gen/activitypb;activitypbb\x06proto3"
+	"\x11frontend_response\x18\x01 \x01(\v2>.temporal.api.workflowservice.v1.PollActivityExecutionResponseR\x10frontendResponse\"\xde\x01\n" +
+	"\x15ActivityLongPollToken\x12!\n" +
+	"\fnamespace_id\x18\x01 \x01(\tR\vnamespaceId\x12\x1f\n" +
+	"\vactivity_id\x18\x02 \x01(\tR\n" +
+	"activityId\x12\x15\n" +
+	"\x06run_id\x18\x03 \x01(\tR\x05runId\x12j\n" +
+	"\x14versioned_transition\x18\x04 \x01(\v27.temporal.server.api.persistence.v1.VersionedTransitionR\x13versionedTransitionBDZBgo.temporal.io/server/chasm/lib/activity/gen/activitypb;activitypbb\x06proto3"
 
 var (
 	file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_rawDescOnce sync.Once
@@ -243,27 +321,30 @@ func file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_raw
 	return file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_rawDescData
 }
 
-var file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_goTypes = []any{
 	(*StartActivityExecutionRequest)(nil),     // 0: temporal.server.chasm.lib.activity.proto.v1.StartActivityExecutionRequest
 	(*StartActivityExecutionResponse)(nil),    // 1: temporal.server.chasm.lib.activity.proto.v1.StartActivityExecutionResponse
 	(*PollActivityExecutionRequest)(nil),      // 2: temporal.server.chasm.lib.activity.proto.v1.PollActivityExecutionRequest
 	(*PollActivityExecutionResponse)(nil),     // 3: temporal.server.chasm.lib.activity.proto.v1.PollActivityExecutionResponse
-	(*v1.StartActivityExecutionRequest)(nil),  // 4: temporal.api.workflowservice.v1.StartActivityExecutionRequest
-	(*v1.StartActivityExecutionResponse)(nil), // 5: temporal.api.workflowservice.v1.StartActivityExecutionResponse
-	(*v1.PollActivityExecutionRequest)(nil),   // 6: temporal.api.workflowservice.v1.PollActivityExecutionRequest
-	(*v1.PollActivityExecutionResponse)(nil),  // 7: temporal.api.workflowservice.v1.PollActivityExecutionResponse
+	(*ActivityLongPollToken)(nil),             // 4: temporal.server.chasm.lib.activity.proto.v1.ActivityLongPollToken
+	(*v1.StartActivityExecutionRequest)(nil),  // 5: temporal.api.workflowservice.v1.StartActivityExecutionRequest
+	(*v1.StartActivityExecutionResponse)(nil), // 6: temporal.api.workflowservice.v1.StartActivityExecutionResponse
+	(*v1.PollActivityExecutionRequest)(nil),   // 7: temporal.api.workflowservice.v1.PollActivityExecutionRequest
+	(*v1.PollActivityExecutionResponse)(nil),  // 8: temporal.api.workflowservice.v1.PollActivityExecutionResponse
+	(*v11.VersionedTransition)(nil),           // 9: temporal.server.api.persistence.v1.VersionedTransition
 }
 var file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_depIdxs = []int32{
-	4, // 0: temporal.server.chasm.lib.activity.proto.v1.StartActivityExecutionRequest.frontend_request:type_name -> temporal.api.workflowservice.v1.StartActivityExecutionRequest
-	5, // 1: temporal.server.chasm.lib.activity.proto.v1.StartActivityExecutionResponse.frontend_response:type_name -> temporal.api.workflowservice.v1.StartActivityExecutionResponse
-	6, // 2: temporal.server.chasm.lib.activity.proto.v1.PollActivityExecutionRequest.frontend_request:type_name -> temporal.api.workflowservice.v1.PollActivityExecutionRequest
-	7, // 3: temporal.server.chasm.lib.activity.proto.v1.PollActivityExecutionResponse.frontend_response:type_name -> temporal.api.workflowservice.v1.PollActivityExecutionResponse
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 0: temporal.server.chasm.lib.activity.proto.v1.StartActivityExecutionRequest.frontend_request:type_name -> temporal.api.workflowservice.v1.StartActivityExecutionRequest
+	6, // 1: temporal.server.chasm.lib.activity.proto.v1.StartActivityExecutionResponse.frontend_response:type_name -> temporal.api.workflowservice.v1.StartActivityExecutionResponse
+	7, // 2: temporal.server.chasm.lib.activity.proto.v1.PollActivityExecutionRequest.frontend_request:type_name -> temporal.api.workflowservice.v1.PollActivityExecutionRequest
+	8, // 3: temporal.server.chasm.lib.activity.proto.v1.PollActivityExecutionResponse.frontend_response:type_name -> temporal.api.workflowservice.v1.PollActivityExecutionResponse
+	9, // 4: temporal.server.chasm.lib.activity.proto.v1.ActivityLongPollToken.versioned_transition:type_name -> temporal.server.api.persistence.v1.VersionedTransition
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_init() }
@@ -277,7 +358,7 @@ func file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_ini
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_rawDesc), len(file_temporal_server_chasm_lib_activity_proto_v1_request_response_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
