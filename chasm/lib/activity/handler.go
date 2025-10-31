@@ -112,7 +112,7 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 
 				if prevTransitionCount == -1 || newTransitionCount > prevTransitionCount {
 					// Prev count unknown or less than new - capture new state and return
-					newStateChangeToken = []byte(strconv.FormatInt(newTransitionCount, 10))
+					newStateChangeToken = refBytes
 
 					if request.GetIncludeInfo() {
 						activityInfo, err = a.buildActivityExecutionInfo(ctx, chasm.EntityKey{
@@ -144,12 +144,7 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 					if err != nil {
 						return nil, false, err
 					}
-					ref, err := chasm.DeserializeComponentRef(refBytes)
-					if err != nil {
-						return nil, false, err
-					}
-					currentCount := ref.GetEntityLastUpdateVersionedTransition().GetTransitionCount()
-					newStateChangeToken = []byte(strconv.FormatInt(currentCount, 10))
+					newStateChangeToken = refBytes
 					if request.GetIncludeInfo() {
 						activityInfo, err = a.buildActivityExecutionInfo(ctx, chasm.EntityKey{
 							NamespaceID: req.GetNamespaceId(),
