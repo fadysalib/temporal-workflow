@@ -252,8 +252,8 @@ func (e *ChasmEngine) ReadComponent(
 }
 
 // readComponentWithShardContext is a variant of ReadComponent that passes shard context to readFn.
-// TODO(dan): we can almost use ReadComponent in PollComponent. Does it make sense to change
-// ReadComponent to this signature?
+// TODO(dan): we're very close to being able to use ReadComponent in PollComponent. Does it make
+// sense to change ReadComponent to this version?
 func (e *ChasmEngine) readComponentWithShardContext(
 	ctx context.Context,
 	ref chasm.ComponentRef,
@@ -299,43 +299,7 @@ func (e *ChasmEngine) PollComponent(
 	// 	return nil, fmt.Errorf("PollComponent operationFn not supported (TODO: remove from interface)")
 	// }
 
-	checkPredicate := func() ([]byte, historyi.ShardContext, error) {
-		// If the predicate is satisfied, return newEntityRef. Also return the shard context
-		// captured during the read of the component.
-		fmt.Println("🔍 Evaluating predicate")
-
-		var newEntityRef []byte
-		var shardContext historyi.ShardContext
-
-		err := e.readComponentWithShardContext(
-			ctx,
-			entityRef,
-			func(cContext chasm.Context, sContext historyi.ShardContext, component chasm.Component) error {
-				shardContext = sContext
-				_, predicateSatisfied, err := predicateFn(cContext, component)
-				if err != nil {
-					return err
-				}
-				if predicateSatisfied {
-					ref, err := cContext.Ref(component)
-					if err != nil {
-						return err
-					}
-					fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
-					newEntityRef = ref
-				} else {
-					fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
-				}
-				return nil
-			},
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		return newEntityRef, shardContext, nil
-	}
-
-	newEntityRef, shardContext, err := checkPredicate()
+	newEntityRef, shardContext, err := e.checkPredicate(ctx, entityRef, predicateFn)
 	if err != nil {
 		return nil, err
 	}
@@ -400,8 +364,8 @@ func (e *ChasmEngine) PollComponent(
 			fmt.Fprintf(os.Stderr, "⬇️ Received notification (subscriber: %s)\n", subscriberID[:8])
 			_ = notification // TODO: use notification data for staleness checks
 			// Received a notification. Re-acquire the lock and check the predicate.
+			newEntityRef, _, err := e.checkPredicate(ctx, entityRef, predicateFn)
 
-			newEntityRef, _, err := checkPredicate()
 			if err != nil {
 				// TODO: If the error was failure to acquire the lock, check how we should handle
 				// that. What are common reasons for failing to acquire the lock?
@@ -428,6 +392,48 @@ func isChasmNotification(notification *events.Notification) bool {
 		return true
 	}
 	return false
+}
+
+// checkPredicate is a helper function for PollComponent that evaluates predicateFn on the
+// component. If the predicate function evaluates to true, it returns a serialized component ref,
+// otherwise it returns a nil component ref. It also returns the shard context captured during the
+// read of the component.
+func (e *ChasmEngine) checkPredicate(
+	ctx context.Context,
+	entityRef chasm.ComponentRef,
+	predicateFn func(chasm.Context, chasm.Component) (any, bool, error),
+) ([]byte, historyi.ShardContext, error) {
+
+	fmt.Println("🔍 Evaluating predicate")
+
+	var shardContext historyi.ShardContext
+	var newEntityRef []byte
+
+	if err := e.readComponentWithShardContext(
+		ctx,
+		entityRef,
+		func(cContext chasm.Context, sContext historyi.ShardContext, component chasm.Component) error {
+			shardContext = sContext
+			_, predicateSatisfied, err := predicateFn(cContext, component)
+			if err != nil {
+				return err
+			}
+			if predicateSatisfied {
+				ref, err := cContext.Ref(component)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
+				newEntityRef = ref
+			} else {
+				fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
+			}
+			return nil
+		},
+	); err != nil {
+		return nil, nil, err
+	}
+	return newEntityRef, shardContext, nil
 }
 
 func (e *ChasmEngine) constructTransitionOptions(
