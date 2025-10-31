@@ -251,6 +251,42 @@ func (e *ChasmEngine) ReadComponent(
 	return readFn(chasmContext, component)
 }
 
+// readComponentWithShardContext is a variant of ReadComponent that passes shard context to readFn.
+// TODO(dan): we're very close to being able to use ReadComponent in PollComponent. Does it make
+// sense to change ReadComponent to this version?
+func (e *ChasmEngine) readComponentWithShardContext(
+	ctx context.Context,
+	ref chasm.ComponentRef,
+	readFn func(chasm.Context, historyi.ShardContext, chasm.Component) error,
+) (retError error) {
+	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Always release the lease with nil error since this is a read only operation
+		// So even if it fails, we don't need to clear and reload mutable state.
+		executionLease.GetReleaseFn()(nil)
+	}()
+
+	chasmTree, ok := executionLease.GetMutableState().ChasmTree().(*chasm.Node)
+	if !ok {
+		return serviceerror.NewInternalf(
+			"CHASM tree implementation not properly wired up, encountered type: %T, expected type: %T",
+			executionLease.GetMutableState().ChasmTree(),
+			&chasm.Node{},
+		)
+	}
+
+	chasmContext := chasm.NewContext(ctx, chasmTree)
+	component, err := chasmTree.Component(chasmContext, ref)
+	if err != nil {
+		return err
+	}
+
+	return readFn(chasmContext, shardContext, component)
+}
+
 func (e *ChasmEngine) PollComponent(
 	ctx context.Context,
 	entityRef chasm.ComponentRef,
@@ -263,13 +299,11 @@ func (e *ChasmEngine) PollComponent(
 	// 	return nil, fmt.Errorf("PollComponent operationFn not supported (TODO: remove from interface)")
 	// }
 
-	newEntityRef, shardContext, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, entityRef, predicateFn)
+	newEntityRef, shardContext, err := e.checkPredicate(ctx, entityRef, predicateFn)
 	if err != nil {
-		executionLease.GetReleaseFn()(nil)
 		return nil, err
 	}
 	if newEntityRef != nil {
-		executionLease.GetReleaseFn()(nil)
 		return newEntityRef, nil
 	}
 
@@ -277,14 +311,12 @@ func (e *ChasmEngine) PollComponent(
 
 	engine, err := shardContext.GetEngine(ctx)
 	if err != nil {
-		executionLease.GetReleaseFn()(nil)
 		return nil, err
 	}
 
 	// TODO: make public watch method
 	historyEngine, ok := engine.(*historyEngineImpl)
 	if !ok {
-		executionLease.GetReleaseFn()(nil)
 		return nil, serviceerror.NewInternalf("unexpected engine type: %T", engine)
 	}
 
@@ -297,7 +329,6 @@ func (e *ChasmEngine) PollComponent(
 	// See e.g. get_workflow_util.go:131-134
 	subscriberID, channel, err := historyEngine.eventNotifier.WatchHistoryEvent(workflowKey)
 	if err != nil {
-		executionLease.GetReleaseFn()(nil)
 		return nil, err
 	}
 	fmt.Fprintf(os.Stderr, "📡 Subscribed (ID: %s) for %s/%s\n",
@@ -305,8 +336,6 @@ func (e *ChasmEngine) PollComponent(
 	defer func() {
 		_ = historyEngine.eventNotifier.UnwatchHistoryEvent(workflowKey, subscriberID)
 	}()
-
-	executionLease.GetReleaseFn()(nil)
 
 	// Set up long-poll timeout
 	// See get_workflow_util.go:185-193
@@ -335,24 +364,19 @@ func (e *ChasmEngine) PollComponent(
 			fmt.Fprintf(os.Stderr, "⬇️ Received notification (subscriber: %s)\n", subscriberID[:8])
 			_ = notification // TODO: use notification data for staleness checks
 			// Received a notification. Re-acquire the lock and check the predicate.
-			newEntityRef, _, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, entityRef, predicateFn)
+			newEntityRef, _, err := e.checkPredicate(ctx, entityRef, predicateFn)
 
 			if err != nil {
 				// TODO: If the error was failure to acquire the lock, check how we should handle
 				// that. What are common reasons for failing to acquire the lock?
-				executionLease.GetReleaseFn()(nil)
 				return nil, err
 			}
 			if newEntityRef != nil {
-				executionLease.GetReleaseFn()(nil)
 				return newEntityRef, nil
 			}
 
 			// TODO: staleness checks (check for stale notification)
 			// cf. get_workflow_util.go:220-222 which checks if notification is out of date
-
-			// Condition still not met, release lock and continue polling
-			executionLease.GetReleaseFn()(nil)
 
 		case <-longPollCtx.Done():
 			// TODO: or return empty response?
@@ -370,58 +394,46 @@ func isChasmNotification(notification *events.Notification) bool {
 	return false
 }
 
-// getExecutionLeaseAndCheckPredicate is a helper function for PollComponent. It uses
-// getExecutionLease to read the component data and acquire the locked lease (with consistency
-// assertions) and then evaluates predicateFn. It returns the locked lease together with shard
-// context; if the predicateFn is satisfied it also returns a serialized ref to the component data.
-func (e *ChasmEngine) getExecutionLeaseAndCheckPredicate(
+// checkPredicate is a helper function for PollComponent that evaluates predicateFn on the
+// component. If the predicate function evaluates to true, it returns a serialized component ref,
+// otherwise it returns a nil component ref. It also returns the shard context captured during the
+// read of the component.
+func (e *ChasmEngine) checkPredicate(
 	ctx context.Context,
 	entityRef chasm.ComponentRef,
 	predicateFn func(chasm.Context, chasm.Component) (any, bool, error),
-) ([]byte, historyi.ShardContext, api.WorkflowLease, error) {
+) ([]byte, historyi.ShardContext, error) {
 
 	fmt.Println("🔍 Evaluating predicate")
 
-	// Obtain chasm tree with lock
-	// cf. service/history/api/get_workflow_util.go:60-68 (GetMutableStateWithConsistencyCheck)
-	// cf. get_workflow_util.go:137-144 (state reloaded after notification)
-	shardContext, executionLease, err := e.getExecutionLease(ctx, entityRef)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	var shardContext historyi.ShardContext
+	var newEntityRef []byte
 
-	chasmTree, ok := executionLease.GetMutableState().ChasmTree().(*chasm.Node)
-	if !ok {
-		fmt.Println("  🌈 error: invalid CHASM tree")
-		return nil, nil, nil, serviceerror.NewInternalf(
-			"invalid CHASM tree, encountered type: %T, expected type: %T",
-			executionLease.GetMutableState().ChasmTree(),
-			&chasm.Node{},
-		)
+	if err := e.readComponentWithShardContext(
+		ctx,
+		entityRef,
+		func(cContext chasm.Context, sContext historyi.ShardContext, component chasm.Component) error {
+			shardContext = sContext
+			_, predicateSatisfied, err := predicateFn(cContext, component)
+			if err != nil {
+				return err
+			}
+			if predicateSatisfied {
+				ref, err := cContext.Ref(component)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
+				newEntityRef = ref
+			} else {
+				fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
+			}
+			return nil
+		},
+	); err != nil {
+		return nil, nil, err
 	}
-
-	chasmContext := chasm.NewContext(ctx, chasmTree)
-	component, err := chasmTree.Component(chasmContext, entityRef)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	_, predicateSatisfied, err := predicateFn(chasmContext, component)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	if predicateSatisfied {
-		newEntityRef, err := chasmContext.Ref(component)
-		if err != nil {
-			return nil, nil, nil, serviceerror.NewInternalf("componentRef: %+v: %s", entityRef, err)
-		}
-		fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
-		return newEntityRef, shardContext, executionLease, nil
-	}
-
-	fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
-	return nil, shardContext, executionLease, nil
+	return newEntityRef, shardContext, nil
 }
 
 func (e *ChasmEngine) constructTransitionOptions(
