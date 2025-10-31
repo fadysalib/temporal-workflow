@@ -69,6 +69,12 @@ func GetOrPollMutableState(
 	if err != nil {
 		return nil, err
 	}
+
+	// Perform consistency/staleness checks on the `response` snapshot.
+	// GetMutableStateWithConsistencyCheck also performs these checks, but it ignores them and
+	// always reloads (which seems wrong), therefore here we are always checking against newly
+	// reloaded data. (If GetMutableStateWithConsistencyCheck respected the checks then these checks
+	// would only be needed if they had failed in GetMutableStateWithConsistencyCheck).
 	currentVersionHistory, err := versionhistory.GetCurrentVersionHistory(response.GetVersionHistories())
 	if err != nil {
 		return nil, err
@@ -311,6 +317,10 @@ func GetMutableStateWithConsistencyCheck(
 				return transitionhistory.StalenessCheck(transitionHistory, versionedTransition) == nil
 			}
 
+			// TODO(dan): the line above implies that, given transition history and
+			// versionedTransition, all the version history checks below are unnecessary. Confirm
+			// that this is true.
+
 			currentVersionHistory, err := versionhistory.GetCurrentVersionHistory(mutableState.GetExecutionInfo().GetVersionHistories())
 			if err != nil {
 				return false
@@ -332,6 +342,12 @@ func GetMutableStateWithConsistencyCheck(
 		return nil, err
 	}
 	defer func() { workflowLease.GetReleaseFn()(retError) }()
+
+	// TODO(dan): why do we reload again? This makes the consistency check pointless. If the
+	// consistency check failed, we already reloaded at
+	// https://github.com/temporalio/temporal/blob/main/service/history/api/consistency_checker.go#L280
+	// mutableState, err = wfContext.LoadMutableState(ctx, c.shardContext)
+	// Relevant PR is https://github.com/temporalio/temporal/pull/6556
 
 	mutableState, err := workflowLease.GetContext().LoadMutableState(ctx, shardContext)
 	if err != nil {
