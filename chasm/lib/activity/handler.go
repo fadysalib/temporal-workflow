@@ -106,17 +106,6 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 					return nil, false, err
 				}
 
-				// TODO: Enhance token format to include full versioned transition
-				// Currently only storing transition count, but should include:
-				// - Namespace failover version
-				// - Transition count
-				// This would allow better staleness detection on subsequent calls
-				//
-				// Example token format:
-				// token := fmt.Sprintf("%d:%d",
-				//     ref.GetEntityLastUpdateVersionedTransition().GetNamespaceFailoverVersion(),
-				//     ref.GetEntityLastUpdateVersionedTransition().GetTransitionCount())
-
 				newTransitionCount := ref.GetEntityLastUpdateVersionedTransition().GetTransitionCount()
 
 				// we're waiting for new transition count to exceed last seen
@@ -137,15 +126,11 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 					}
 					return nil, true, nil
 				} else if newTransitionCount < prevTransitionCount {
-					// This indicates either:
-					// 1. Client has a stale reference (failover happened)
-					// 2. State regression (should not happen)
-					// TODO: Check namespace failover version to distinguish these cases
+					// TODO: error code?
 					return nil, false, serviceerror.NewFailedPrecondition(
 						fmt.Sprintf("invalid activity state: last seen transition count (%d) exceeds current (%d)", prevTransitionCount, newTransitionCount))
 				} else {
 					// No change yet - keep waiting
-					// TODO: Also check namespace failover version hasn't changed
 					return nil, false, nil
 				}
 			}
@@ -191,39 +176,10 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 				EntityID:    request.GetRunId(),
 			}),
 			predicateFn,
-			nil, // No operation function - just waiting for state change
+			nil,
 			nil,
 		)
 		if err != nil {
-			// TODO: Handle specific error types as discussed in transcript:
-			// 1. ShardOwnershipLost - frontend should retry with updated routing
-			// 2. FailedPrecondition (stale reference) - client needs to update view
-			// 3. NotFound - activity doesn't exist
-			// 4. ResourceExhausted - too many concurrent pollers
-			// 5. DeadlineExceeded - long poll timed out (not necessarily an error)
-			//
-			// Example error handling:
-			// switch {
-			// case errors.Is(err, consts.ErrShardOwnershipLost):
-			//     // Let frontend retry with updated shard routing
-			//     return nil, serviceerror.NewUnavailable("shard ownership lost")
-			// case serviceerror.IsFailedPrecondition(err):
-			//     // Client has stale view, needs to refresh
-			//     return nil, err
-			// case serviceerror.IsNotFound(err):
-			//     // Activity doesn't exist
-			//     return nil, err
-			// case serviceerror.IsResourceExhausted(err):
-			//     // Too many concurrent pollers
-			//     return nil, err
-			// case serviceerror.IsDeadlineExceeded(err):
-			//     // Long poll timed out - return current state if available
-			//     // This is not necessarily an error condition
-			//     break
-			// default:
-			//     return nil, err
-			// }
-
 			return nil, err
 		}
 	}
