@@ -394,10 +394,9 @@ func isChasmNotification(notification *events.Notification) bool {
 	return false
 }
 
-// checkPredicate is a helper function for PollComponent that evaluates predicateFn on the
-// component. If the predicate function evaluates to true, it returns a serialized component ref,
-// otherwise it returns a nil component ref. It also returns the shard context captured during the
-// read of the component.
+// checkPredicate is a helper function that evaluates predicateFn on the component. If the predicate
+// function evaluates to true, it returns a serialized component ref, otherwise it returns a nil
+// component ref. It also returns the shard context captured during the read of the component.
 func (e *ChasmEngine) checkPredicate(
 	ctx context.Context,
 	entityRef chasm.ComponentRef,
@@ -409,7 +408,7 @@ func (e *ChasmEngine) checkPredicate(
 	var shardContext historyi.ShardContext
 	var newEntityRef []byte
 
-	if err := e.readComponentWithShardContext(
+	err := e.readComponentWithShardContext(
 		ctx,
 		entityRef,
 		func(cContext chasm.Context, sContext historyi.ShardContext, component chasm.Component) error {
@@ -430,7 +429,8 @@ func (e *ChasmEngine) checkPredicate(
 			}
 			return nil
 		},
-	); err != nil {
+	)
+	if err != nil {
 		return nil, nil, err
 	}
 	return newEntityRef, shardContext, nil

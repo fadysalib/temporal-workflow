@@ -61,6 +61,8 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.PollActivityExecutionRequest) (*activitypb.PollActivityExecutionResponse, error) {
 	request := req.GetFrontendRequest()
 
+	// serialized ref received in request
+	var refFromToken chasm.ComponentRef
 	// Returned token representing state of component seen by caller.
 	var newStateChangeToken []byte
 	// Returned info for the activity
@@ -71,6 +73,7 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 		// Long-poll
 
 		var predicateFn func(*Activity, chasm.Context, any) (any, bool, error)
+		var err error
 
 		switch waitPolicy := request.GetWaitPolicy().(type) {
 		case *workflowservice.PollActivityExecutionRequest_WaitAnyStateChange:
@@ -85,14 +88,18 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 			//    caller's last-seen count then return immediately. Otherwise, use PollComponent to
 			//    wait for the component transition count to exceed last-seen.
 
-			token := waitPolicy.WaitAnyStateChange.GetLongPollToken()
-			var prevTransitionCount int64 = -1
-			if token != nil {
-				parsed, err := strconv.ParseInt(string(token), 10, 64)
+			refBytesFromToken := waitPolicy.WaitAnyStateChange.GetLongPollToken()
+			if refBytesFromToken != nil {
+				refFromToken, err = chasm.DeserializeComponentRef(refBytesFromToken)
 				if err != nil {
 					return nil, serviceerror.NewInvalidArgument("invalid long poll token")
 				}
-				prevTransitionCount = parsed
+			} else {
+				refFromToken = chasm.NewComponentRef[*Activity](chasm.EntityKey{
+					NamespaceID: req.GetNamespaceId(),
+					BusinessID:  request.GetActivityId(),
+					EntityID:    request.GetRunId(),
+				})
 			}
 
 			predicateFn = func(a *Activity, ctx chasm.Context, _ any) (any, bool, error) {
@@ -136,6 +143,11 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 			}
 
 		case *workflowservice.PollActivityExecutionRequest_WaitCompletion:
+			refFromToken = chasm.NewComponentRef[*Activity](chasm.EntityKey{
+				NamespaceID: req.GetNamespaceId(),
+				BusinessID:  request.GetActivityId(),
+				EntityID:    request.GetRunId(),
+			})
 			predicateFn = func(a *Activity, ctx chasm.Context, _ any) (any, bool, error) {
 				completed := a.State() == activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED
 
@@ -163,15 +175,13 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 			return nil, fmt.Errorf("unexpected wait policy type: %T", waitPolicy)
 		}
 
-		_, _, err := chasm.PollComponent[*Activity, chasm.ComponentRef, any, any, any](
+		var operationFn func(*Activity, chasm.MutableContext, any, any) (any, error)
+
+		_, _, err = chasm.PollComponent(
 			ctx,
-			chasm.NewComponentRef[*Activity](chasm.EntityKey{
-				NamespaceID: req.GetNamespaceId(),
-				BusinessID:  request.GetActivityId(),
-				EntityID:    request.GetRunId(),
-			}),
+			refFromToken,
 			predicateFn,
-			nil,
+			operationFn,
 			nil,
 		)
 		if err != nil {
