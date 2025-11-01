@@ -289,25 +289,21 @@ func (e *ChasmEngine) readComponentWithShardContext(
 
 func (e *ChasmEngine) PollComponent(
 	ctx context.Context,
-	entityRef chasm.ComponentRef,
-	predicateFn func(chasm.Context, chasm.Component) (any, bool, error),
-	operationFn func(chasm.MutableContext, chasm.Component, any) error,
+	ref chasm.ComponentRef,
+	predicateFn func(chasm.Context, chasm.Component) (bool, error),
 	opts ...chasm.TransitionOption,
-) (newEntityRef []byte, err error) {
+) ([]byte, error) {
 
-	// if operationFn != nil {
-	// 	return nil, fmt.Errorf("PollComponent operationFn not supported (TODO: remove from interface)")
-	// }
-
-	newEntityRef, shardContext, err := e.checkPredicate(ctx, entityRef, predicateFn)
+	newRef, shardContext, err := e.checkPredicate(ctx, ref, predicateFn)
 	if err != nil {
 		return nil, err
 	}
-	if newEntityRef != nil {
-		return newEntityRef, nil
+	if newRef != nil {
+		// wait condition was satisfied
+		return newRef, nil
 	}
 
-	// Wait condition not met, need to long-poll
+	// Wait predicate not satisfied, need to long-poll
 
 	engine, err := shardContext.GetEngine(ctx)
 	if err != nil {
@@ -321,9 +317,9 @@ func (e *ChasmEngine) PollComponent(
 	}
 
 	workflowKey := definition.NewWorkflowKey(
-		entityRef.EntityKey.NamespaceID,
-		entityRef.EntityKey.BusinessID,
-		entityRef.EntityKey.EntityID,
+		ref.EntityKey.NamespaceID,
+		ref.EntityKey.BusinessID,
+		ref.EntityKey.EntityID,
 	)
 
 	// See e.g. get_workflow_util.go:131-134
@@ -340,7 +336,7 @@ func (e *ChasmEngine) PollComponent(
 	// Set up long-poll timeout
 	// See get_workflow_util.go:185-193
 	namespaceRegistry, err := shardContext.GetNamespaceRegistry().GetNamespaceByID(
-		namespace.ID(entityRef.EntityKey.NamespaceID),
+		namespace.ID(ref.EntityKey.NamespaceID),
 	)
 	if err != nil {
 		return nil, err
@@ -364,15 +360,14 @@ func (e *ChasmEngine) PollComponent(
 			fmt.Fprintf(os.Stderr, "⬇️ Received notification (subscriber: %s)\n", subscriberID[:8])
 			_ = notification // TODO: use notification data for staleness checks
 			// Received a notification. Re-acquire the lock and check the predicate.
-			newEntityRef, _, err := e.checkPredicate(ctx, entityRef, predicateFn)
-
+			newRef, _, err := e.checkPredicate(ctx, ref, predicateFn)
 			if err != nil {
 				// TODO: If the error was failure to acquire the lock, check how we should handle
 				// that. What are common reasons for failing to acquire the lock?
 				return nil, err
 			}
-			if newEntityRef != nil {
-				return newEntityRef, nil
+			if newRef != nil {
+				return newRef, nil
 			}
 
 			// TODO: staleness checks (check for stale notification)
@@ -399,31 +394,31 @@ func isChasmNotification(notification *events.Notification) bool {
 // component ref. It also returns the shard context captured during the read of the component.
 func (e *ChasmEngine) checkPredicate(
 	ctx context.Context,
-	entityRef chasm.ComponentRef,
-	predicateFn func(chasm.Context, chasm.Component) (any, bool, error),
+	ref chasm.ComponentRef,
+	predicateFn func(chasm.Context, chasm.Component) (bool, error),
 ) ([]byte, historyi.ShardContext, error) {
 
 	fmt.Println("🔍 Evaluating predicate")
 
-	var shardContext historyi.ShardContext
-	var newEntityRef []byte
+	var newRef []byte
+	var newShardContext historyi.ShardContext
 
 	err := e.readComponentWithShardContext(
 		ctx,
-		entityRef,
-		func(cContext chasm.Context, sContext historyi.ShardContext, component chasm.Component) error {
-			shardContext = sContext
-			_, predicateSatisfied, err := predicateFn(cContext, component)
+		ref,
+		func(chasmContext chasm.Context, shardContext historyi.ShardContext, component chasm.Component) error {
+			newShardContext = shardContext
+			satisfied, err := predicateFn(chasmContext, component)
 			if err != nil {
 				return err
 			}
-			if predicateSatisfied {
-				ref, err := cContext.Ref(component)
+			if satisfied {
+				ref, err := chasmContext.Ref(component)
 				if err != nil {
 					return err
 				}
+				newRef = ref
 				fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
-				newEntityRef = ref
 			} else {
 				fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
 			}
@@ -433,7 +428,7 @@ func (e *ChasmEngine) checkPredicate(
 	if err != nil {
 		return nil, nil, err
 	}
-	return newEntityRef, shardContext, nil
+	return newRef, newShardContext, nil
 }
 
 func (e *ChasmEngine) constructTransitionOptions(

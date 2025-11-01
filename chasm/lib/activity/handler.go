@@ -95,9 +95,9 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 	refBytesFromToken := waitPolicy.WaitAnyStateChange.GetLongPollToken()
 
 	var refFromToken chasm.ComponentRef
-	var err error
 
 	if refBytesFromToken != nil {
+		var err error
 		refFromToken, err = chasm.DeserializeComponentRef(refBytesFromToken)
 		if err != nil {
 			return nil, serviceerror.NewInvalidArgument("invalid long poll token")
@@ -110,13 +110,14 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 		})
 	}
 
-	var response *activitypb.PollActivityExecutionResponse
-	var operationFn func(*Activity, chasm.MutableContext, any, any) (any, error)
-
-	_, _, err = chasm.PollComponent(
+	response, ref, err := chasm.PollComponent(
 		ctx,
 		refFromToken,
-		func(a *Activity, ctx chasm.Context, _ any) (any, bool, error) {
+		func(
+			a *Activity,
+			ctx chasm.Context,
+			req *activitypb.PollActivityExecutionRequest,
+		) (*activitypb.PollActivityExecutionResponse, bool, error) {
 			refBytes, err := ctx.Ref(a)
 			if err != nil {
 				return nil, false, err
@@ -130,14 +131,14 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 			// TODO: correct logic. Must use failover version.
 			prevTransitionCount := refFromToken.GetEntityLastUpdateVersionedTransition().GetTransitionCount()
 			newTransitionCount := ref.GetEntityLastUpdateVersionedTransition().GetTransitionCount()
+			stateChanged := newTransitionCount > prevTransitionCount
 
-			if newTransitionCount > prevTransitionCount {
-				// Prev count unknown or less than new - capture new state and return
-				response, err = a.buildPollActivityExecutionResponse(ctx, req)
+			if stateChanged {
+				response, err := a.buildPollActivityExecutionResponse(ctx, req)
 				if err != nil {
-					return nil, false, err
+					return nil, true, err
 				}
-				return nil, true, nil
+				return response, true, nil
 			} else if newTransitionCount < prevTransitionCount {
 				// TODO: error code?
 				return nil, false, serviceerror.NewFailedPrecondition(
@@ -147,45 +148,43 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 				return nil, false, nil
 			}
 		},
-		operationFn,
-		nil,
+		req,
 	)
 	if err != nil {
 		return nil, err
 	}
+	response.GetFrontendResponse().StateChangeLongPollToken = ref
 	return response, nil
 }
 
 func pollActivityExecutionWaitCompletion(ctx context.Context, req *activitypb.PollActivityExecutionRequest) (*activitypb.PollActivityExecutionResponse, error) {
-	request := req.GetFrontendRequest()
-
-	var response *activitypb.PollActivityExecutionResponse
-	// TODO: operationFn is unused; consider removing from API
-	var operationFn func(*Activity, chasm.MutableContext, any, any) (any, error)
-
-	_, _, err := chasm.PollComponent(
+	response, ref, err := chasm.PollComponent(
 		ctx,
 		chasm.NewComponentRef[*Activity](chasm.EntityKey{
 			NamespaceID: req.GetNamespaceId(),
-			BusinessID:  request.GetActivityId(),
-			EntityID:    request.GetRunId(),
+			BusinessID:  req.GetFrontendRequest().GetActivityId(),
+			EntityID:    req.GetFrontendRequest().GetRunId(),
 		}),
-		func(a *Activity, ctx chasm.Context, _ any) (any, bool, error) {
-			if a.State() == activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED {
-				var err error
-				response, err = a.buildPollActivityExecutionResponse(ctx, req)
+		func(
+			a *Activity,
+			ctx chasm.Context,
+			req *activitypb.PollActivityExecutionRequest,
+		) (*activitypb.PollActivityExecutionResponse, bool, error) {
+			completed := a.State() == activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED
+			if completed {
+				response, err := a.buildPollActivityExecutionResponse(ctx, req)
 				if err != nil {
-					return nil, false, err
+					return nil, true, err
 				}
-				return nil, true, nil
+				return response, true, nil
 			}
 			return nil, false, nil
 		},
-		operationFn,
-		nil,
+		req,
 	)
 	if err != nil {
 		return nil, err
 	}
+	response.GetFrontendResponse().StateChangeLongPollToken = ref
 	return response, nil
 }

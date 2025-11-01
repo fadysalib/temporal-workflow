@@ -38,8 +38,7 @@ type Engine interface {
 	PollComponent(
 		context.Context,
 		ComponentRef,
-		func(Context, Component) (any, bool, error),
-		func(MutableContext, Component, any) error,
+		func(Context, Component) (bool, error),
 		...TransitionOption,
 	) ([]byte, error)
 }
@@ -237,11 +236,10 @@ type PollComponentRequest[C Component, I any, O any] struct {
 	Input       I
 }
 
-func PollComponent[C Component, R []byte | ComponentRef, I any, O any, T any](
+func PollComponent[C Component, R []byte | ComponentRef, I any, O any](
 	ctx context.Context,
 	r R,
-	predicateFn func(C, Context, I) (T, bool, error),
-	operationFn func(C, MutableContext, I, T) (O, error),
+	predicateFn func(C, Context, I) (O, bool, error),
 	input I,
 	opts ...TransitionOption,
 ) (O, []byte, error) {
@@ -257,13 +255,12 @@ func PollComponent[C Component, R []byte | ComponentRef, I any, O any, T any](
 	newSerializedRef, err := engineFromContext(ctx).PollComponent(
 		ctx,
 		ref,
-		func(ctx Context, c Component) (any, bool, error) {
-			return predicateFn(c.(C), ctx, input)
-		},
-		func(ctx MutableContext, c Component, t any) error {
-			var err error
-			output, err = operationFn(c.(C), ctx, input, t.(T))
-			return err
+		func(ctx Context, c Component) (bool, error) {
+			out, satisfied, err := predicateFn(c.(C), ctx, input)
+			if satisfied {
+				output = out
+			}
+			return satisfied, err
 		},
 		opts...,
 	)
