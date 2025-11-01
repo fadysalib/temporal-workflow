@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"go.temporal.io/api/activity/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
@@ -60,7 +59,17 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.PollActivityExecutionRequest) (*activitypb.PollActivityExecutionResponse, error) {
 	switch req.GetFrontendRequest().GetWaitPolicy().(type) {
 	case nil:
-		return pollActivityExecutionNoWait(ctx, req)
+		return chasm.ReadComponent(
+			ctx,
+			chasm.NewComponentRef[*Activity](chasm.EntityKey{
+				NamespaceID: req.GetNamespaceId(),
+				BusinessID:  req.GetFrontendRequest().GetActivityId(),
+				EntityID:    req.GetFrontendRequest().GetRunId(),
+			}),
+			(*Activity).buildPollActivityExecutionResponse,
+			nil,
+			nil,
+		)
 	case *workflowservice.PollActivityExecutionRequest_WaitAnyStateChange:
 		return pollActivityExecutionWaitAnyStateChange(ctx, req)
 	case *workflowservice.PollActivityExecutionRequest_WaitCompletion:
@@ -68,49 +77,6 @@ func (h *handler) PollActivityExecution(ctx context.Context, req *activitypb.Pol
 	default:
 		return nil, fmt.Errorf("unexpected wait policy type: %T", req.GetFrontendRequest().GetWaitPolicy())
 	}
-}
-
-func pollActivityExecutionNoWait(ctx context.Context, req *activitypb.PollActivityExecutionRequest) (*activitypb.PollActivityExecutionResponse, error) {
-	request := req.GetFrontendRequest()
-	// Returned token representing state of component seen by caller.
-	var newStateChangeToken []byte
-	// Returned info for the activity
-	var activityInfo *activity.ActivityExecutionInfo
-	var err error
-
-	key := chasm.EntityKey{
-		NamespaceID: req.GetNamespaceId(),
-		BusinessID:  request.GetActivityId(),
-		EntityID:    request.GetRunId(),
-	}
-
-	response, err := chasm.ReadComponent(
-		ctx,
-		chasm.NewComponentRef[*Activity](key),
-		func(a *Activity, chasmContext chasm.Context, _ any) (*workflowservice.PollActivityExecutionResponse, error) {
-			if request.GetIncludeInfo() {
-				activityInfo, err = a.buildActivityExecutionInfo(chasmContext, key)
-				if err != nil {
-					return nil, err
-				}
-			}
-			return &workflowservice.PollActivityExecutionResponse{
-				Info:                     activityInfo,
-				RunId:                    "",  // TODO
-				Outcome:                  nil, // TODO
-				Input:                    nil, // TODO
-				StateChangeLongPollToken: newStateChangeToken,
-			}, nil
-		},
-		nil,
-		nil,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &activitypb.PollActivityExecutionResponse{
-		FrontendResponse: response,
-	}, nil
 }
 
 func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activitypb.PollActivityExecutionRequest) (*activitypb.PollActivityExecutionResponse, error) {
@@ -128,14 +94,7 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 	waitPolicy := request.GetWaitPolicy().(*workflowservice.PollActivityExecutionRequest_WaitAnyStateChange)
 	refBytesFromToken := waitPolicy.WaitAnyStateChange.GetLongPollToken()
 
-	// serialized ref received in request
 	var refFromToken chasm.ComponentRef
-	// Returned token representing state of component seen by caller.
-	var newStateChangeToken []byte
-	// Returned info for the activity
-	var activityInfo *activity.ActivityExecutionInfo
-	var operationFn func(*Activity, chasm.MutableContext, any, any) (any, error)
-
 	var err error
 
 	if refBytesFromToken != nil {
@@ -150,6 +109,9 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 			EntityID:    request.GetRunId(),
 		})
 	}
+
+	var response *activitypb.PollActivityExecutionResponse
+	var operationFn func(*Activity, chasm.MutableContext, any, any) (any, error)
 
 	_, _, err = chasm.PollComponent(
 		ctx,
@@ -171,17 +133,9 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 
 			if newTransitionCount > prevTransitionCount {
 				// Prev count unknown or less than new - capture new state and return
-				newStateChangeToken = refBytes
-
-				if request.GetIncludeInfo() {
-					activityInfo, err = a.buildActivityExecutionInfo(ctx, chasm.EntityKey{
-						NamespaceID: req.GetNamespaceId(),
-						BusinessID:  request.GetActivityId(),
-						EntityID:    request.GetRunId(),
-					})
-					if err != nil {
-						return nil, false, err
-					}
+				response, err = a.buildPollActivityExecutionResponse(ctx, req)
+				if err != nil {
+					return nil, false, err
 				}
 				return nil, true, nil
 			} else if newTransitionCount < prevTransitionCount {
@@ -199,23 +153,13 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 	if err != nil {
 		return nil, err
 	}
-	return &activitypb.PollActivityExecutionResponse{
-		FrontendResponse: &workflowservice.PollActivityExecutionResponse{
-			Info:                     activityInfo,
-			RunId:                    "",  // TODO
-			Outcome:                  nil, // TODO
-			Input:                    nil, // TODO
-			StateChangeLongPollToken: newStateChangeToken,
-		},
-	}, nil
+	return response, nil
 }
 
 func pollActivityExecutionWaitCompletion(ctx context.Context, req *activitypb.PollActivityExecutionRequest) (*activitypb.PollActivityExecutionResponse, error) {
 	request := req.GetFrontendRequest()
-	// Returned token representing state of component seen by caller.
-	var newStateChangeToken []byte
-	// Returned info for the activity
-	var activityInfo *activity.ActivityExecutionInfo
+
+	var response *activitypb.PollActivityExecutionResponse
 	// TODO: operationFn is unused; consider removing from API
 	var operationFn func(*Activity, chasm.MutableContext, any, any) (any, error)
 
@@ -227,26 +171,15 @@ func pollActivityExecutionWaitCompletion(ctx context.Context, req *activitypb.Po
 			EntityID:    request.GetRunId(),
 		}),
 		func(a *Activity, ctx chasm.Context, _ any) (any, bool, error) {
-			completed := a.State() == activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED
-
-			if completed {
-				refBytes, err := ctx.Ref(a)
+			if a.State() == activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED {
+				var err error
+				response, err = a.buildPollActivityExecutionResponse(ctx, req)
 				if err != nil {
 					return nil, false, err
 				}
-				newStateChangeToken = refBytes
-				if request.GetIncludeInfo() {
-					activityInfo, err = a.buildActivityExecutionInfo(ctx, chasm.EntityKey{
-						NamespaceID: req.GetNamespaceId(),
-						BusinessID:  request.GetActivityId(),
-						EntityID:    request.GetRunId(),
-					})
-					if err != nil {
-						return nil, false, err
-					}
-				}
+				return nil, true, nil
 			}
-			return nil, completed, nil
+			return nil, false, nil
 		},
 		operationFn,
 		nil,
@@ -254,14 +187,5 @@ func pollActivityExecutionWaitCompletion(ctx context.Context, req *activitypb.Po
 	if err != nil {
 		return nil, err
 	}
-
-	return &activitypb.PollActivityExecutionResponse{
-		FrontendResponse: &workflowservice.PollActivityExecutionResponse{
-			Info:                     activityInfo,
-			RunId:                    "",  // TODO
-			Outcome:                  nil, // TODO
-			Input:                    nil, // TODO
-			StateChangeLongPollToken: newStateChangeToken,
-		},
-	}, nil
+	return response, nil
 }

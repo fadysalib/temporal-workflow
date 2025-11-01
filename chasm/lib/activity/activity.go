@@ -298,3 +298,48 @@ func (a *Activity) buildActivityExecutionInfo(ctx chasm.Context, key chasm.Entit
 
 	return info, nil
 }
+
+func (a *Activity) buildPollActivityExecutionResponse(
+	ctx chasm.Context,
+	req *activitypb.PollActivityExecutionRequest,
+) (*activitypb.PollActivityExecutionResponse, error) {
+	var err error
+	request := req.GetFrontendRequest()
+
+	var info *activity.ActivityExecutionInfo
+	if request.GetIncludeInfo() {
+		info, err = a.buildActivityExecutionInfo(ctx, chasm.EntityKey{
+			NamespaceID: req.GetNamespaceId(),
+			BusinessID:  request.GetActivityId(),
+			EntityID:    request.GetRunId(),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var input *commonpb.Payloads
+	if request.GetIncludeInput() {
+		activityRequest, err := a.RequestData.Get(ctx)
+		if err != nil {
+			return nil, err
+		}
+		input = activityRequest.Input
+	}
+
+	// TODO: this looks slightly expensive to compute. Pass it in to this function.
+	ref, err := ctx.Ref(a)
+	if err != nil {
+		return nil, err
+	}
+
+	return &activitypb.PollActivityExecutionResponse{
+		FrontendResponse: &workflowservice.PollActivityExecutionResponse{
+			Info:                     info,
+			RunId:                    "",  // TODO: when does RunId change?
+			Outcome:                  nil, // TODO
+			Input:                    input,
+			StateChangeLongPollToken: ref,
+		},
+	}, nil
+}
