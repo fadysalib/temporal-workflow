@@ -151,6 +151,7 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 	case <-activityPollDone:
 		require.NoError(t, activityPollErr)
 		require.NotNil(t, activityPollResp)
+		require.NotNil(t, activityPollResp.Info)
 		require.Equal(t, activityID, activityPollResp.Info.ActivityId)
 		require.Equal(t, startResp.RunId, activityPollResp.Info.RunId)
 	case <-ctx.Done():
