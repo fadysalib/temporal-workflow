@@ -198,6 +198,11 @@ func (e *ChasmEngine) UpdateComponent(
 
 	// TODO: Support WithSpeculative() TransitionOption.
 
+	// TODO: This results in a call to NotifyNewHistorySnapshotEvent:
+	// UpdateWorkflowExecutionAsActive => UpdateWorkflowExecutionWithNew => UpdateWorkflowExecution
+
+	// So if we are going to publish our own chasm-specific UpdateComponent notification, then we
+	// have to ensure that subscribers do not get confused by the two notifications.
 	if err := executionLease.GetContext().UpdateWorkflowExecutionAsActive(
 		ctx,
 		shardContext,
