@@ -23,6 +23,7 @@ import (
 
 type standaloneActivityTestSuite struct {
 	testcore.FunctionalTestBase
+	chasmEngine chasm.Engine
 }
 
 func TestStandaloneActivityTestSuite(t *testing.T) {
@@ -30,15 +31,22 @@ func TestStandaloneActivityTestSuite(t *testing.T) {
 	suite.Run(t, new(standaloneActivityTestSuite))
 }
 
-func (s *standaloneActivityTestSuite) TestStartActivityExecution() {
-	t := s.T()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
+func (s *standaloneActivityTestSuite) SetupSuite() {
+	s.FunctionalTestBase.SetupSuite()
 	s.OverrideDynamicConfig(
 		dynamicconfig.EnableChasm,
 		true,
 	)
+	var err error
+	s.chasmEngine, err = s.FunctionalTestBase.GetTestCluster().Host().ChasmEngine()
+	s.Require().NoError(err)
+	s.Require().NotNil(s.chasmEngine)
+}
+
+func (s *standaloneActivityTestSuite) TestStartActivityExecution() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 
 	activityID := testcore.RandomizeStr(t.Name())
 	activityType := &commonpb.ActivityType{
@@ -98,10 +106,6 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 	t := s.T()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	s.OverrideDynamicConfig(
-		dynamicconfig.EnableChasm,
-		true,
-	)
 	activityID := testcore.RandomizeStr(t.Name())
 	taskQueue := uuid.New().String()
 
@@ -164,18 +168,11 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 	require.NoError(t, err)
 }
 
-func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateChange_LongPollToken() {
+func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateChange_Success() {
 	t := s.T()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	s.OverrideDynamicConfig(
-		dynamicconfig.EnableChasm,
-		true,
-	)
-
-	chasmEngine, err := s.FunctionalTestBase.GetTestCluster().Host().ChasmEngine()
-	require.NoError(t, err)
-	ctx = chasm.NewEngineContext(ctx, chasmEngine)
+	ctx = chasm.NewEngineContext(ctx, s.chasmEngine)
 
 	activityID := testcore.RandomizeStr(t.Name())
 	taskQueue := uuid.New().String()
@@ -183,7 +180,7 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 	startResp, err := s.startActivity(ctx, activityID, taskQueue)
 	require.NoError(t, err)
 
-	ref1, err := chasm.ReadComponent(ctx, chasm.NewComponentRef[*activity.Activity](chasm.EntityKey{
+	ref, err := chasm.ReadComponent(ctx, chasm.NewComponentRef[*activity.Activity](chasm.EntityKey{
 		NamespaceID: s.NamespaceID().String(),
 		BusinessID:  activityID,
 		EntityID:    startResp.RunId,
@@ -191,7 +188,7 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 		return ctx.Ref(a)
 	}, nil)
 
-	_, _, err = chasm.UpdateComponent(ctx, ref1, func(a *activity.Activity, ctx chasm.MutableContext, _ any) (any, error) {
+	_, _, err = chasm.UpdateComponent(ctx, ref, func(a *activity.Activity, ctx chasm.MutableContext, _ any) (any, error) {
 		return nil, nil
 	}, nil)
 	require.NoError(t, err)
@@ -202,7 +199,7 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 		RunId:      startResp.RunId,
 		WaitPolicy: &workflowservice.PollActivityExecutionRequest_WaitAnyStateChange{
 			WaitAnyStateChange: &workflowservice.PollActivityExecutionRequest_StateChangeWaitOptions{
-				LongPollToken: ref1,
+				LongPollToken: ref,
 			},
 		},
 	})
