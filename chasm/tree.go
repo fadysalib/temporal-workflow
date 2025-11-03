@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -2295,16 +2296,30 @@ func (n *Node) IsStateDirty() bool {
 func (n *Node) IsStale(
 	ref ComponentRef,
 ) error {
+
 	// The point of this method to access the private entityLastUpdateVT field in componentRef,
 	// and avoid exposing it in the public CHASM interface.
 	if ref.entityLastUpdateVT == nil {
 		return nil
 	}
 
-	return transitionhistory.StalenessCheck(
+	err := transitionhistory.StalenessCheck(
 		n.backend.GetExecutionInfo().TransitionHistory,
 		ref.entityLastUpdateVT,
 	)
+
+	transitionHistory := make([]string, len(n.backend.GetExecutionInfo().TransitionHistory))
+	for i, vt := range n.backend.GetExecutionInfo().TransitionHistory {
+		transitionHistory[i] = fmt.Sprintf("(%d, %d)", vt.NamespaceFailoverVersion, vt.TransitionCount)
+	}
+
+	fmt.Printf("\n\n🔍 IsStale:\n  ref: (%d, %d)\n  transition history: %s\n    error: %s\n\n\n",
+		ref.entityLastUpdateVT.NamespaceFailoverVersion,
+		ref.entityLastUpdateVT.TransitionCount,
+		strings.Join(transitionHistory, ", "),
+		err,
+	)
+	return err
 }
 
 func (n *Node) Terminate(
