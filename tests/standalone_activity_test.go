@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -207,6 +208,51 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 	require.NotNil(t, firstPollResp.StateChangeLongPollToken)
 }
 
+func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateChange_InvalidLongPollToken() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ctx = chasm.NewEngineContext(ctx, s.chasmEngine)
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := uuid.New().String()
+
+	startResp, err := s.startActivity(ctx, activityID, taskQueue)
+	require.NoError(t, err)
+
+	ref, err := chasm.ReadComponent(ctx, chasm.NewComponentRef[*activity.Activity](chasm.EntityKey{
+		NamespaceID: s.NamespaceID().String(),
+		BusinessID:  activityID,
+		EntityID:    startResp.RunId,
+	}), func(a *activity.Activity, ctx chasm.Context, _ any) ([]byte, error) {
+		return ctx.Ref(a)
+	}, nil)
+
+	refDeserialized, err := chasm.DeserializeComponentRef(ref)
+	require.NoError(t, err)
+	vt := refDeserialized.GetEntityLastUpdateVersionedTransition()
+	vt.NamespaceFailoverVersion += 1
+	ref, err = refDeserialized.Serialize(nil)
+	require.NoError(t, err)
+
+	_, _, err = chasm.UpdateComponent(ctx, ref, func(a *activity.Activity, ctx chasm.MutableContext, _ any) (any, error) {
+		return nil, nil
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: activityID,
+		RunId:      startResp.RunId,
+		WaitPolicy: &workflowservice.PollActivityExecutionRequest_WaitAnyStateChange{
+			WaitAnyStateChange: &workflowservice.PollActivityExecutionRequest_StateChangeWaitOptions{
+				LongPollToken: ref,
+			},
+		},
+	})
+	fmt.Println("err", err)
+	require.Error(t, err)
+}
 func (s *standaloneActivityTestSuite) startActivity(ctx context.Context, activityID string, taskQueue string) (*workflowservice.StartActivityExecutionResponse, error) {
 	return s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
 		Namespace:  s.Namespace().String(),
