@@ -13,6 +13,8 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/proto"
@@ -160,6 +162,52 @@ func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateCha
 
 	err = <-taskQueuePollErr
 	require.NoError(t, err)
+}
+
+func (s *standaloneActivityTestSuite) Test_PollActivityExecution_WaitAnyStateChange_LongPollToken() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	s.OverrideDynamicConfig(
+		dynamicconfig.EnableChasm,
+		true,
+	)
+
+	chasmEngine, err := s.FunctionalTestBase.GetTestCluster().Host().ChasmEngine()
+	require.NoError(t, err)
+	ctx = chasm.NewEngineContext(ctx, chasmEngine)
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := uuid.New().String()
+
+	startResp, err := s.startActivity(ctx, activityID, taskQueue)
+	require.NoError(t, err)
+
+	ref1, err := chasm.ReadComponent(ctx, chasm.NewComponentRef[*activity.Activity](chasm.EntityKey{
+		NamespaceID: s.NamespaceID().String(),
+		BusinessID:  activityID,
+		EntityID:    startResp.RunId,
+	}), func(a *activity.Activity, ctx chasm.Context, _ any) ([]byte, error) {
+		return ctx.Ref(a)
+	}, nil)
+
+	_, _, err = chasm.UpdateComponent(ctx, ref1, func(a *activity.Activity, ctx chasm.MutableContext, _ any) (any, error) {
+		return nil, nil
+	}, nil)
+	require.NoError(t, err)
+
+	firstPollResp, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: activityID,
+		RunId:      startResp.RunId,
+		WaitPolicy: &workflowservice.PollActivityExecutionRequest_WaitAnyStateChange{
+			WaitAnyStateChange: &workflowservice.PollActivityExecutionRequest_StateChangeWaitOptions{
+				LongPollToken: ref1,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, firstPollResp.StateChangeLongPollToken)
 }
 
 func (s *standaloneActivityTestSuite) startActivity(ctx context.Context, activityID string, taskQueue string) (*workflowservice.StartActivityExecutionResponse, error) {

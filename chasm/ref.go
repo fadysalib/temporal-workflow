@@ -1,7 +1,9 @@
 package chasm
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 
 	"go.temporal.io/api/serviceerror"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
@@ -154,4 +156,21 @@ func ProtoRefToComponentRef(pRef *persistencespb.ChasmComponentRef) ComponentRef
 		componentPath:      pRef.ComponentPath,
 		componentInitialVT: pRef.ComponentInitialVersionedTransition,
 	}
+}
+
+func (r *ComponentRef) String() string {
+	fields := [][]string{
+		{"NamespaceID", r.NamespaceID},
+		{"BusinessID", r.BusinessID},
+		{"EntityID", r.EntityID},
+		{"Archetype", r.archetype.String()},
+		{"EntityLastUpdateVT", r.entityLastUpdateVT.String()},
+		{"ComponentPath", strings.Join(r.componentPath, "/")},
+		{"ComponentInitialVT", r.componentInitialVT.String()},
+	}
+	lines := make([]string, len(fields))
+	for i, field := range fields {
+		lines[i] = fmt.Sprintf("    %s: %s", field[0], field[1])
+	}
+	return strings.Join(lines, "\n")
 }

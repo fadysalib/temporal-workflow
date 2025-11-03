@@ -185,6 +185,8 @@ func UpdateComponent[C Component, R []byte | ComponentRef, I any, O any](
 		return output, nil, err
 	}
 
+	fmt.Printf("🔄 chasm.UpdateComponent\n  ref:\n%s\n", ref.String())
+
 	newSerializedRef, err := engineFromContext(ctx).UpdateComponent(
 		ctx,
 		ref,
@@ -245,7 +247,7 @@ func PollComponent[C Component, R []byte | ComponentRef, I any, O any](
 ) (O, []byte, error) {
 	var output O
 
-	fmt.Println("🔄 chasm.PollComponent")
+	fmt.Println("⏪ chasm.PollComponent")
 
 	ref, err := convertComponentRef(r)
 	if err != nil {

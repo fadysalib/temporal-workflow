@@ -128,6 +128,9 @@ func pollActivityExecutionWaitAnyStateChange(ctx context.Context, req *activityp
 				return nil, false, err
 			}
 
+			fmt.Printf("🔍 evaluating predicate\n  refFromToken:\n%s\n  ref:\n%s\n",
+				refFromToken.String(), ref.String())
+
 			// TODO: correct logic. Must use failover version.
 			prevTransitionCount := refFromToken.GetEntityLastUpdateVersionedTransition().GetTransitionCount()
 			newTransitionCount := ref.GetEntityLastUpdateVersionedTransition().GetTransitionCount()
