@@ -256,53 +256,6 @@ func (e *ChasmEngine) ReadComponent(
 	return readFn(chasmContext, component)
 }
 
-// readComponentWithShardContext is similar to ReadComponent, but
-// (a) it returns an error if the ref fails the staleness check against component history. The
-// staleness check is also computed in getExecutionLease, but there ErrStaleState is not treated as
-// an error.
-// (b) it passes shard context to readFn.
-func (e *ChasmEngine) readComponentWithShardContext(
-	ctx context.Context,
-	ref chasm.ComponentRef,
-	readFn func(chasm.Context, historyi.ShardContext, chasm.Component) error,
-) (retError error) {
-	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
-	if err != nil {
-		// E.g. ErrStaleReference
-		return err
-	}
-	defer func() {
-		// Always release the lease with nil error since this is a read only operation
-		// So even if it fails, we don't need to clear and reload mutable state.
-		executionLease.GetReleaseFn()(nil)
-	}()
-
-	chasmTree, ok := executionLease.GetMutableState().ChasmTree().(*chasm.Node)
-	if !ok {
-		return serviceerror.NewInternalf(
-			"CHASM tree implementation not properly wired up, encountered type: %T, expected type: %T",
-			executionLease.GetMutableState().ChasmTree(),
-			&chasm.Node{},
-		)
-	}
-
-	// Require the ref to pass staleness checks against the component history, as we do in
-	// GetOrPollMutableState. (The staleness checks were done already in getExecutionLease, but here
-	// ErrStaleState is treated as an error whereas there it just triggered reload.)
-	err = chasmTree.IsStale(ref)
-	if err != nil {
-		return err
-	}
-
-	chasmContext := chasm.NewContext(ctx, chasmTree)
-	component, err := chasmTree.Component(chasmContext, ref)
-	if err != nil {
-		return err
-	}
-
-	return readFn(chasmContext, shardContext, component)
-}
-
 func (e *ChasmEngine) PollComponent(
 	ctx context.Context,
 	ref chasm.ComponentRef,
@@ -396,18 +349,11 @@ func (e *ChasmEngine) PollComponent(
 	}
 }
 
-func isChasmNotification(notification *events.Notification) bool {
-	// TODO: implement proper way for chasm components to ignore notifications sent by NotifyNewHistorySnapshotEvent
-	// HACK:
-	if notification.WorkflowState == enumsspb.WORKFLOW_EXECUTION_STATE_UNSPECIFIED && notification.WorkflowStatus == enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED {
-		return true
-	}
-	return false
-}
-
-// checkPredicate is a helper function that evaluates predicateFn on the component. If the predicate
-// function evaluates to true, it returns a serialized component ref, otherwise it returns a nil
-// component ref. It also returns the shard context captured during the read of the component.
+// checkPredicate is a helper function that evaluates predicateFn on the component. It returns (ref,
+// shardContext, err), where ref is nil if the predicate function evaluates to false. It's
+// essentially a different version of ReadComponent, that (a) returns an error if the ref fails the
+// staleness check against component history (ErrStaleState or ErrStaleReference) and (b) returns
+// the shard context.
 func (e *ChasmEngine) checkPredicate(
 	ctx context.Context,
 	ref chasm.ComponentRef,
@@ -416,35 +362,62 @@ func (e *ChasmEngine) checkPredicate(
 
 	fmt.Println("🔍 Evaluating predicate")
 
-	var newRef []byte
-	var newShardContext historyi.ShardContext
+	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
+	if err != nil {
+		// E.g. ErrStaleReference
+		return nil, nil, err
+	}
+	defer func() {
+		// Always release the lease with nil error since this is a read only operation
+		// So even if it fails, we don't need to clear and reload mutable state.
+		executionLease.GetReleaseFn()(nil)
+	}()
 
-	err := e.readComponentWithShardContext(
-		ctx,
-		ref,
-		func(chasmContext chasm.Context, shardContext historyi.ShardContext, component chasm.Component) error {
-			newShardContext = shardContext
-			satisfied, err := predicateFn(chasmContext, component)
-			if err != nil {
-				return err
-			}
-			if satisfied {
-				ref, err := chasmContext.Ref(component)
-				if err != nil {
-					return err
-				}
-				newRef = ref
-				fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
-			} else {
-				fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
-			}
-			return nil
-		},
-	)
+	chasmTree, ok := executionLease.GetMutableState().ChasmTree().(*chasm.Node)
+	if !ok {
+		return nil, nil, serviceerror.NewInternalf(
+			"CHASM tree implementation not properly wired up, encountered type: %T, expected type: %T",
+			executionLease.GetMutableState().ChasmTree(),
+			&chasm.Node{},
+		)
+	}
+
+	// Require the ref to pass staleness checks against the component history, as we do in
+	// GetOrPollMutableState. (The staleness checks were done already in getExecutionLease, but here
+	// ErrStaleState is treated as an error whereas there it just triggered reload.)
+	err = chasmTree.IsStale(ref)
 	if err != nil {
 		return nil, nil, err
 	}
-	return newRef, newShardContext, nil
+
+	chasmContext := chasm.NewContext(ctx, chasmTree)
+	component, err := chasmTree.Component(chasmContext, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	satisfied, err := predicateFn(chasmContext, component)
+	if err != nil {
+		return nil, nil, err
+	}
+	if satisfied {
+		ref, err := chasmContext.Ref(component)
+		if err != nil {
+			return nil, nil, err
+		}
+		fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
+		return ref, shardContext, nil
+	}
+	fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
+	return nil, shardContext, nil
+}
+
+func isChasmNotification(notification *events.Notification) bool {
+	// TODO: implement proper way for chasm components to ignore notifications sent by NotifyNewHistorySnapshotEvent
+	// HACK:
+	if notification.WorkflowState == enumsspb.WORKFLOW_EXECUTION_STATE_UNSPECIFIED && notification.WorkflowStatus == enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED {
+		return true
+	}
+	return false
 }
 
 func (e *ChasmEngine) constructTransitionOptions(
