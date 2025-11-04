@@ -263,7 +263,16 @@ func (e *ChasmEngine) PollComponent(
 	opts ...chasm.TransitionOption,
 ) ([]byte, error) {
 
-	newRef, shardContext, err := e.checkPredicate(ctx, ref, predicateFn)
+	newRef, shardContext, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, ref, predicateFn)
+
+	released := false
+	defer func() {
+		if !released && executionLease != nil {
+			// read-only operation; don't pass error
+			executionLease.GetReleaseFn()(nil)
+		}
+	}()
+
 	if err != nil {
 		return nil, err
 	}
@@ -296,6 +305,11 @@ func (e *ChasmEngine) PollComponent(
 	if err != nil {
 		return nil, err
 	}
+
+	// Release the lock, now that we are subscribed
+	executionLease.GetReleaseFn()(nil)
+	released = true
+
 	fmt.Fprintf(os.Stderr, "📡 Subscribed (ID: %s) for %s/%s\n",
 		subscriberID[:8], workflowKey.NamespaceID[:8], workflowKey.WorkflowID)
 	defer func() {
@@ -329,7 +343,10 @@ func (e *ChasmEngine) PollComponent(
 			fmt.Fprintf(os.Stderr, "⬇️ Received notification (subscriber: %s)\n", subscriberID[:8])
 			_ = notification // TODO: use notification data for staleness checks
 			// Received a notification. Re-acquire the lock and check the predicate.
-			newRef, _, err := e.checkPredicate(ctx, ref, predicateFn)
+			newRef, _, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, ref, predicateFn)
+			if executionLease != nil {
+				executionLease.GetReleaseFn()(nil)
+			}
 			if err != nil {
 				// TODO: If the error was failure to acquire the lock, check how we should handle
 				// that. What are common reasons for failing to acquire the lock?
@@ -349,33 +366,41 @@ func (e *ChasmEngine) PollComponent(
 	}
 }
 
-// checkPredicate is a helper function that evaluates predicateFn on the component. It returns (ref,
-// shardContext, err), where ref is nil if the predicate function evaluates to false. It's
-// essentially a different version of ReadComponent, that (a) returns an error if the ref fails the
-// staleness check against component history (ErrStaleState or ErrStaleReference) and (b) returns
-// the shard context.
-func (e *ChasmEngine) checkPredicate(
+// getExecutionLeaseAndCheckPredicate is a helper function that evaluates predicateFn on the component. The lock
+// acquired in order to read the component data is not released. It returns
+// (ref,shardContext,executionLease,err). ref is nil if the predicate function evaluates to false.
+//
+// Its implementation is similar to ReadComponent. The differences are
+// (a) it returns an error if the ref fails the staleness check against component history
+// (ErrStaleState or ErrStaleReference)
+// (b) it does not release the lock it acquires unless there was an error
+// (c) it returns the shard context.
+func (e *ChasmEngine) getExecutionLeaseAndCheckPredicate(
 	ctx context.Context,
 	ref chasm.ComponentRef,
 	predicateFn func(chasm.Context, chasm.Component) (bool, error),
-) ([]byte, historyi.ShardContext, error) {
+) (newRef []byte, shardContext historyi.ShardContext, executionLease api.WorkflowLease, retError error) {
 
 	fmt.Println("🔍 Evaluating predicate")
 
 	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
+	defer func() {
+		// return executionLease with lock held unless there's an error
+		if retError != nil && executionLease != nil {
+			// read-only operation; don't pass error
+			executionLease.GetReleaseFn()(nil)
+
+		}
+	}()
+
 	if err != nil {
 		// E.g. ErrStaleReference
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	defer func() {
-		// Always release the lease with nil error since this is a read only operation
-		// So even if it fails, we don't need to clear and reload mutable state.
-		executionLease.GetReleaseFn()(nil)
-	}()
 
 	chasmTree, ok := executionLease.GetMutableState().ChasmTree().(*chasm.Node)
 	if !ok {
-		return nil, nil, serviceerror.NewInternalf(
+		return nil, nil, nil, serviceerror.NewInternalf(
 			"CHASM tree implementation not properly wired up, encountered type: %T, expected type: %T",
 			executionLease.GetMutableState().ChasmTree(),
 			&chasm.Node{},
@@ -387,28 +412,28 @@ func (e *ChasmEngine) checkPredicate(
 	// ErrStaleState is treated as an error whereas there it just triggered reload.)
 	err = chasmTree.IsStale(ref)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	chasmContext := chasm.NewContext(ctx, chasmTree)
 	component, err := chasmTree.Component(chasmContext, ref)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	satisfied, err := predicateFn(chasmContext, component)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if satisfied {
 		ref, err := chasmContext.Ref(component)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
-		return ref, shardContext, nil
+		return ref, shardContext, executionLease, nil
 	}
 	fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
-	return nil, shardContext, nil
+	return nil, shardContext, executionLease, nil
 }
 
 func isChasmNotification(notification *events.Notification) bool {
