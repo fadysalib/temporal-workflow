@@ -18,7 +18,7 @@ func TestFieldNameAggInterceptor(t *testing.T) {
 	s := require.New(t)
 	fnInterceptor := newFieldNameAggInterceptor(
 		testNamespace,
-		searchattribute.TestNameTypeMap,
+		searchattribute.TestEsNameTypeMap(),
 		searchattribute.NewTestMapperProvider(nil),
 	)
 
@@ -108,7 +108,7 @@ func TestGetQueryFields(t *testing.T) {
 				s := require.New(t)
 				fields, err := getQueryFields(
 					testNamespace,
-					searchattribute.TestNameTypeMap,
+					searchattribute.TestEsNameTypeMap(),
 					searchattribute.NewTestMapperProvider(nil),
 					tc.input,
 				)
@@ -188,7 +188,7 @@ func TestValidateVisibilityQuery(t *testing.T) {
 				s := require.New(t)
 				err := ValidateVisibilityQuery(
 					testNamespace,
-					searchattribute.TestNameTypeMap,
+					searchattribute.TestEsNameTypeMap(),
 					searchattribute.NewTestMapperProvider(nil),
 					tc.input,
 				)
