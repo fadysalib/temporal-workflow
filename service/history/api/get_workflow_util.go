@@ -71,10 +71,10 @@ func GetOrPollMutableState(
 	}
 
 	// Perform consistency/staleness checks on the `response` snapshot.
-	// GetMutableStateWithConsistencyCheck also performs these checks, but it ignores them and
-	// always reloads (which seems wrong), therefore here we are always checking against newly
-	// reloaded data. (If GetMutableStateWithConsistencyCheck respected the checks then these checks
-	// would only be needed if they had failed in GetMutableStateWithConsistencyCheck).
+	// TODO(dan): GetMutableStateWithConsistencyCheck also performs these checks, but it ignores
+	// them and always reloads (which seems wrong), therefore here we are always checking against
+	// newly reloaded data. (If GetMutableStateWithConsistencyCheck respected the checks then these
+	// checks would only be needed if they had failed in GetMutableStateWithConsistencyCheck).
 	currentVersionHistory, err := versionhistory.GetCurrentVersionHistory(response.GetVersionHistories())
 	if err != nil {
 		return nil, err
@@ -318,8 +318,8 @@ func GetMutableStateWithConsistencyCheck(
 			}
 
 			// TODO(dan): the line above implies that, given transition history and
-			// versionedTransition, all the version history checks below are unnecessary. Confirm
-			// that this is true.
+			// versionedTransition, all the version history checks below are unnecessary. Why is
+			// this true?
 
 			currentVersionHistory, err := versionhistory.GetCurrentVersionHistory(mutableState.GetExecutionInfo().GetVersionHistories())
 			if err != nil {

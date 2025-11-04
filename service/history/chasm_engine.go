@@ -256,9 +256,11 @@ func (e *ChasmEngine) ReadComponent(
 	return readFn(chasmContext, component)
 }
 
-// readComponentWithShardContext is a variant of ReadComponent that passes shard context to readFn.
-// TODO(dan): we're very close to being able to use ReadComponent in PollComponent. Does it make
-// sense to change ReadComponent to this version?
+// readComponentWithShardContext is similar to ReadComponent, but
+// (a) it returns an error if the ref fails the staleness check against component history. The
+// staleness check is also computed in getExecutionLease, but there ErrStaleState is not treated as
+// an error.
+// (b) it passes shard context to readFn.
 func (e *ChasmEngine) readComponentWithShardContext(
 	ctx context.Context,
 	ref chasm.ComponentRef,
@@ -266,6 +268,7 @@ func (e *ChasmEngine) readComponentWithShardContext(
 ) (retError error) {
 	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
 	if err != nil {
+		// E.g. ErrStaleReference
 		return err
 	}
 	defer func() {
