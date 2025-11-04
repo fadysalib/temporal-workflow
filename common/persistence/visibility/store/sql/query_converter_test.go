@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/temporalio/sqlparser"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/visibility/store/query"
 	"go.temporal.io/server/common/primitives"
@@ -48,7 +47,7 @@ func (s *queryConverterSuite) SetupTest() {
 		s.pqc,
 		testNamespaceName,
 		testNamespaceID,
-		searchattribute.TestNameTypeMap,
+		searchattribute.TestNameTypeMap(),
 		&searchattribute.TestMapper{},
 		"",
 	)
@@ -142,7 +141,7 @@ func (s *queryConverterSuite) TestConvertWhereString() {
 				s.pqc,
 				testNamespaceName,
 				testNamespaceID,
-				searchattribute.TestNameTypeMap,
+				searchattribute.TestNameTypeMap(),
 				&searchattribute.TestMapper{},
 				"",
 			)
@@ -587,22 +586,28 @@ func (s *queryConverterSuite) TestConvertColName() {
 		{
 			name:   "ScheduleId when there is a ScheduleId custom SA",
 			input:  searchattribute.ScheduleID,
-			output: searchattribute.ScheduleID,
+			output: "Keyword10",
 			retValue: newSAColName(
+				"Keyword10",
 				searchattribute.ScheduleID,
-				searchattribute.ScheduleID,
-				searchattribute.ScheduleID,
+				"Keyword10",
 				enumspb.INDEXED_VALUE_TYPE_KEYWORD,
 			),
 			err: nil,
 			setup: func() {
-				s.queryConverter.saTypeMap = searchattribute.TestNameTypeMapWithScheduleId
+				s.queryConverter.saTypeMap = searchattribute.TestNameTypeMap()
 				s.queryConverter.saMapper = newMapper(
-					func(alias, namespace string) (string, error) {
-						return alias, nil
-					},
 					func(fieldName, namespace string) (string, error) {
-						return searchattribute.ScheduleID, nil
+						if fieldName == "Keyword10" {
+							return searchattribute.ScheduleID, nil
+						}
+						return fieldName, nil
+					},
+					func(alias, namespace string) (string, error) {
+						if alias == searchattribute.ScheduleID {
+							return "Keyword10", nil
+						}
+						return alias, nil
 					},
 				)
 			},
@@ -618,18 +623,6 @@ func (s *queryConverterSuite) TestConvertColName() {
 				enumspb.INDEXED_VALUE_TYPE_KEYWORD,
 			),
 			err: nil,
-			setup: func() {
-				s.queryConverter.saMapper = newMapper(
-					func(alias, namespace string) (string, error) {
-						return alias, nil
-					},
-					func(fieldName, namespace string) (string, error) {
-						return "", serviceerror.NewInvalidArgument(
-							fmt.Sprintf("Namespace %s has no mapping defined for field name %s", namespace, fieldName),
-						)
-					},
-				)
-			},
 		},
 	}
 
