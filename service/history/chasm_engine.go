@@ -286,6 +286,14 @@ func (e *ChasmEngine) readComponentWithShardContext(
 		)
 	}
 
+	// Require the ref to pass staleness checks against the component history, as we do in
+	// GetOrPollMutableState. (The staleness checks were done already in getExecutionLease, but here
+	// ErrStaleState is treated as an error whereas there it just triggered reload.)
+	err = chasmTree.IsStale(ref)
+	if err != nil {
+		return err
+	}
+
 	chasmContext := chasm.NewContext(ctx, chasmTree)
 	component, err := chasmTree.Component(chasmContext, ref)
 	if err != nil {
