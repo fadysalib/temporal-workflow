@@ -263,16 +263,21 @@ func (e *ChasmEngine) PollComponent(
 	opts ...chasm.TransitionOption,
 ) ([]byte, error) {
 
-	newRef, shardContext, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, ref, predicateFn)
+	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 
+	// hold lock until subscription established
 	released := false
 	defer func() {
-		if !released && executionLease != nil {
+		if !released {
 			// read-only operation; don't pass error
 			executionLease.GetReleaseFn()(nil)
 		}
 	}()
 
+	newRef, err := e.checkPredicate(ctx, ref, executionLease, predicateFn)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +286,7 @@ func (e *ChasmEngine) PollComponent(
 		return newRef, nil
 	}
 
-	// Wait predicate not satisfied, need to long-poll
+	// Wait condition not satisfied, need to long-poll
 
 	engine, err := shardContext.GetEngine(ctx)
 	if err != nil {
@@ -305,16 +310,16 @@ func (e *ChasmEngine) PollComponent(
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		_ = historyEngine.eventNotifier.UnwatchHistoryEvent(workflowKey, subscriberID)
+	}()
+
+	fmt.Fprintf(os.Stderr, "📡 Subscribed (ID: %s) for %s/%s\n",
+		subscriberID[:8], workflowKey.NamespaceID[:8], workflowKey.WorkflowID)
 
 	// Release the lock, now that we are subscribed
 	executionLease.GetReleaseFn()(nil)
 	released = true
-
-	fmt.Fprintf(os.Stderr, "📡 Subscribed (ID: %s) for %s/%s\n",
-		subscriberID[:8], workflowKey.NamespaceID[:8], workflowKey.WorkflowID)
-	defer func() {
-		_ = historyEngine.eventNotifier.UnwatchHistoryEvent(workflowKey, subscriberID)
-	}()
 
 	// Set up long-poll timeout
 	// See get_workflow_util.go:185-193
@@ -343,16 +348,20 @@ func (e *ChasmEngine) PollComponent(
 			fmt.Fprintf(os.Stderr, "⬇️ Received notification (subscriber: %s)\n", subscriberID[:8])
 			_ = notification // TODO: use notification data for staleness checks
 			// Received a notification. Re-acquire the lock and check the predicate.
-			newRef, _, executionLease, err := e.getExecutionLeaseAndCheckPredicate(ctx, ref, predicateFn)
-			if executionLease != nil {
-				executionLease.GetReleaseFn()(nil)
-			}
+			_, executionLease, err := e.getExecutionLease(ctx, ref)
 			if err != nil {
 				// TODO: If the error was failure to acquire the lock, check how we should handle
 				// that. What are common reasons for failing to acquire the lock?
 				return nil, err
 			}
+
+			newRef, err := e.checkPredicate(ctx, ref, executionLease, predicateFn)
+			executionLease.GetReleaseFn()(nil)
+			if err != nil {
+				return nil, err
+			}
 			if newRef != nil {
+				// wait condition was satisfied
 				return newRef, nil
 			}
 
@@ -366,41 +375,20 @@ func (e *ChasmEngine) PollComponent(
 	}
 }
 
-// getExecutionLeaseAndCheckPredicate is a helper function that evaluates predicateFn on the component. The lock
-// acquired in order to read the component data is not released. It returns
-// (ref,shardContext,executionLease,err). ref is nil if the predicate function evaluates to false.
-//
-// Its implementation is similar to ReadComponent. The differences are
-// (a) it returns an error if the ref fails the staleness check against component history
-// (ErrStaleState or ErrStaleReference)
-// (b) it does not release the lock it acquires unless there was an error
-// (c) it returns the shard context.
-func (e *ChasmEngine) getExecutionLeaseAndCheckPredicate(
+// checkPredicate is a helper function for PollComponent. It returns (ref, err) where ref is non-nil
+// iff there's no error and predicateFn evaluates to true.
+func (e *ChasmEngine) checkPredicate(
 	ctx context.Context,
 	ref chasm.ComponentRef,
+	executionLease api.WorkflowLease,
 	predicateFn func(chasm.Context, chasm.Component) (bool, error),
-) (newRef []byte, shardContext historyi.ShardContext, executionLease api.WorkflowLease, retError error) {
+) ([]byte, error) {
 
 	fmt.Println("🔍 Evaluating predicate")
 
-	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
-	defer func() {
-		// return executionLease with lock held unless there's an error
-		if retError != nil && executionLease != nil {
-			// read-only operation; don't pass error
-			executionLease.GetReleaseFn()(nil)
-
-		}
-	}()
-
-	if err != nil {
-		// E.g. ErrStaleReference
-		return nil, nil, nil, err
-	}
-
 	chasmTree, ok := executionLease.GetMutableState().ChasmTree().(*chasm.Node)
 	if !ok {
-		return nil, nil, nil, serviceerror.NewInternalf(
+		return nil, serviceerror.NewInternalf(
 			"CHASM tree implementation not properly wired up, encountered type: %T, expected type: %T",
 			executionLease.GetMutableState().ChasmTree(),
 			&chasm.Node{},
@@ -410,30 +398,31 @@ func (e *ChasmEngine) getExecutionLeaseAndCheckPredicate(
 	// Require the ref to pass staleness checks against the component history, as we do in
 	// GetOrPollMutableState. (The staleness checks were done already in getExecutionLease, but here
 	// ErrStaleState is treated as an error whereas there it just triggered reload.)
-	err = chasmTree.IsStale(ref)
+	err := chasmTree.IsStale(ref)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	chasmContext := chasm.NewContext(ctx, chasmTree)
 	component, err := chasmTree.Component(chasmContext, ref)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	satisfied, err := predicateFn(chasmContext, component)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	if satisfied {
-		ref, err := chasmContext.Ref(component)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning immediately\n")
-		return ref, shardContext, executionLease, nil
+	if !satisfied {
+		fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
+		return nil, nil
 	}
-	fmt.Fprintf(os.Stderr, "  🕰️ Predicate not satisfied - entering long-poll\n")
-	return nil, shardContext, executionLease, nil
+	fmt.Fprintf(os.Stderr, "  ✅ Predicate satisfied - returning\n")
+
+	newRef, err := chasmContext.Ref(component)
+	if err != nil {
+		return nil, err
+	}
+	return newRef, nil
 }
 
 func isChasmNotification(notification *events.Notification) bool {
